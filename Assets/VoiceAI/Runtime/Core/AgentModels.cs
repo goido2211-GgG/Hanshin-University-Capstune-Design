@@ -95,6 +95,8 @@ namespace AgentEscape.VoiceAI
     /// <summary>한 턴의 최종 결과. 게임 코드는 이것만 보면 된다.</summary>
     public sealed class AgentTurnResult
     {
+        // Unity에서만 생성한다. LLM 응답에는 이 식별자를 넣지 않는다.
+        public AgentCommandId CommandId;
         public string PlayerText;
         public AgentResponse Response;
         public List<AgentAction> Actions = new List<AgentAction>();
@@ -103,6 +105,43 @@ namespace AgentEscape.VoiceAI
         public TurnDirective Directive;
         /// <summary>API 오류로 대체 대사를 사용한 턴이면 true.</summary>
         public bool IsFallback;
+    }
+
+    public readonly struct AgentCommandId : System.IEquatable<AgentCommandId>
+    {
+        public readonly System.Guid Session;
+        public readonly long Sequence;
+        public AgentCommandId(System.Guid session, long sequence) { Session = session; Sequence = sequence; }
+        public bool Equals(AgentCommandId other) => Session == other.Session && Sequence == other.Sequence;
+        public override bool Equals(object obj) => obj is AgentCommandId other && Equals(other);
+        public override int GetHashCode() => Session.GetHashCode() ^ Sequence.GetHashCode();
+        public override string ToString() => Session.ToString("N").Substring(0, 8) + ":" + Sequence;
+    }
+
+    public enum AgentExecutionState { Idle, AwaitingInterpretation, Announcing, Waiting, Executing }
+    public enum AgentExecutionOutcome { Completed, Cancelled, Rejected, Failed }
+    public enum AgentCommandSource { Player, Autonomous }
+
+    public sealed class AgentExecutionResult
+    {
+        public AgentCommandId CommandId;
+        public AgentCommandSource Source;
+        // -1: 아직 행동을 시작하지 않았거나 작업 전체에 대한 결과.
+        public int ActionIndex = -1;
+        public AgentExecutionOutcome Outcome;
+        public string Message;
+    }
+
+    /// <summary>전송·파싱만 끝난 턴. CommitTurn 전에는 대화 상태에 영향이 없다.</summary>
+    public sealed class PreparedAgentTurn
+    {
+        internal int Revision;
+        internal bool Committed;
+        internal AgentBrain Owner;
+        internal System.Threading.CancellationToken Cancellation;
+        internal string PlayerText;
+        internal StageContext Context;
+        internal AgentResponse Response;
     }
 
     /// <summary>요원에게 현재 보이는 오브젝트. 퍼즐 정답은 넣지 않는다.</summary>

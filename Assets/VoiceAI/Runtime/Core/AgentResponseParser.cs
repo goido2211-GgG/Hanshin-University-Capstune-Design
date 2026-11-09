@@ -53,39 +53,38 @@ namespace AgentEscape.VoiceAI
         /// 플레이어가 프롬프트를 조작해도 퍼즐을 건너뛸 수 없게 하는 마지막 관문이다.
         /// </summary>
         public static void Validate(AgentResponse response, StageContext context, int trust,
-            List<AgentAction> accepted, List<RejectedAction> rejected)
+            List<AgentAction> accepted, List<RejectedAction> rejected, bool checkInventory = true)
         {
-            var objects = context.Objects.ToDictionary(o => o.Id);
-
-            foreach (var action in response.Actions)
+            foreach (var action in response.Actions ?? new List<AgentAction>())
             {
+                if (action != null && action.Verb == AgentVocabulary.MoveDirection)
+                    action.Steps = Math.Max(1, Math.Min(MaxSteps, action.Steps ?? 1));
                 if (accepted.Count >= MaxActionsPerTurn)
                 {
                     rejected.Add(new RejectedAction { Action = action, Reason = "한 턴 행동 수 초과" });
                     continue;
                 }
 
-                string reason = CheckAction(action, objects, context, trust);
+                string reason = response.Comprehension == AgentVocabulary.Asking || response.Comprehension == AgentVocabulary.Refused
+                    ? "질문 또는 거부 응답의 행동은 실행하지 않습니다."
+                    : CheckAction(action, context, trust, checkInventory);
                 if (reason != null)
                 {
                     rejected.Add(new RejectedAction { Action = action, Reason = reason });
                     continue;
                 }
 
-                if (action.Verb == AgentVocabulary.MoveDirection)
-                {
-                    action.Steps = Math.Max(1, Math.Min(MaxSteps, action.Steps ?? 1));
-                }
                 accepted.Add(action);
             }
         }
 
-        private static string CheckAction(AgentAction action, Dictionary<string, StageObject> objects,
-            StageContext context, int trust)
+        public static string CheckAction(AgentAction action, StageContext context, int trust, bool checkInventory = true)
         {
+            if (action == null) return "행동이 비어 있음";
             if (!AgentVocabulary.Verbs.Contains(action.Verb)) return "알 수 없는 동사: " + action.Verb;
+            if (!IsImplemented(action.Verb)) return "아직 구현되지 않은 행동: " + action.Verb;
 
-            if (action.Item != null && !context.Inventory.Contains(action.Item))
+            if (checkInventory && action.Item != null && !context.Inventory.Contains(action.Item))
             {
                 return "가지고 있지 않은 물건: " + action.Item;
             }
@@ -95,15 +94,28 @@ namespace AgentEscape.VoiceAI
             {
                 return "방향이 없음";
             }
+            if (action.Verb == AgentVocabulary.MoveDirection && action.Steps.HasValue &&
+                (action.Steps.Value < 1 || action.Steps.Value > MaxSteps)) return "걸음 수 범위를 벗어났습니다.";
 
             if (AgentVocabulary.NoTargetVerbs.Contains(action.Verb)) return null;
 
             if (action.Target == null) return action.Verb + "에 대상이 없음";
-            if (!objects.TryGetValue(action.Target, out var target)) return "없는 오브젝트: " + action.Target;
+            var targets = context.Objects.Where(o => o.Id == action.Target).ToArray();
+            if (targets.Length != 1) return "없거나 중복된 오브젝트: " + action.Target;
+            var target = targets[0];
             if (AgentVocabulary.AlwaysAllowedVerbs.Contains(action.Verb)) return null;
+            if (checkInventory && action.Verb == AgentVocabulary.Drop && !context.Inventory.Contains(action.Target))
+                return "가지고 있지 않은 대상: " + action.Target;
+            if (checkInventory && action.Verb == AgentVocabulary.PickUp && context.Inventory.Contains(action.Target))
+                return "이미 들고 있는 대상: " + action.Target;
             if (!target.AllowedVerbs.Contains(action.Verb)) return target.Id + "에는 " + action.Verb + "을(를) 할 수 없음";
             if (trust < target.MinTrust) return target.Id + " 조작에 신뢰도 " + target.MinTrust + " 필요 (현재 " + trust + ")";
             return null;
         }
+
+        public static bool IsImplemented(string verb) => verb == AgentVocabulary.MoveTo ||
+            verb == AgentVocabulary.MoveDirection || verb == AgentVocabulary.Inspect ||
+            verb == AgentVocabulary.PickUp || verb == AgentVocabulary.Drop ||
+            verb == AgentVocabulary.Wait || verb == AgentVocabulary.Stop;
     }
 }

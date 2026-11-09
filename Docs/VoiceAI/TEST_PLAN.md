@@ -2,11 +2,217 @@
 
 기준일: 2026-11-09 (Asia/Seoul).
 
+## 2026-11-10 — Animation Event 오류 최소 수정
+
+사용자 직접 보고: Unity에서 반자율 탐색은 작동하지만 `KyleRobot / Walk_N / OnFootstep has no receiver` 오류가 발생한다. **수신기를 연결한 후의 실제 Unity 시험은 아직 미실행**이다. 이 보고를 이전 X01~X16 전체 사례의 통과로 확대하지 않는다.
+
+### 실제 이벤트·콜백 계약
+
+조사 경로: `Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/*.fbx.meta` 및 `SpaceRobotKyle/Models/KyleRobot.fbx.meta`.
+
+| 클립 | 실제 이벤트 | 메타데이터 time 저장값 |
+|---|---|---|
+| Walk_N | OnFootstep 2개 | 0.31872225, 0.7970205 |
+| Run_N | OnFootstep 2개 | 0.3221903, 0.8077375 |
+| Run_S | OnFootstep 2개 | 0.4519231, 0.9519231 |
+| Walk_N_Land / Run_N_Land | 각각 OnLand 1개 | 0.1691976 / 0.1763074 |
+| JumpLand (Jump--Jump.anim.fbx) | OnLand 1개 | 0.1615599 |
+
+추가 인자는 모두 문자열 data 빈 값, objectReferenceParameter의 instanceID 0, float/int 0, messageOptions 0이다. Idle·JumpStart·InAir와 Kyle 모델 메타에는 이벤트가 없다. 모델 Import 메타의 time 저장값을 실제 초로 단정하지 않는다.
+
+새 `RobotAnimationEventReceiver`는 public OnFootstep(AnimationEvent), OnLand(AnimationEvent)로 이벤트 객체를 받아 아무 상태도 변경하지 않는다. null 인자에도 접근하지 않으므로 예외를 만들지 않는다. 발소리·착지음·점프 동작은 구현하지 않는다.
+
+### Inspector 설정 — 이벤트를 보내는 Animator와 같은 GameObject
+
+1. Play Mode를 종료하고 Hierarchy에서 **RobotAnimatorBridge의 Target Animator로 연결한 KyleRobot**을 선택한다. 저장된 씬 기준 일반적으로 `player/KyleRobot`이다.
+2. Inspector에서 그 GameObject에 Animator가 있고 Controller가 StarterAssetsThirdPerson인지 확인한다. 같은 이름의 `player/KyleRobot/Geometry/KyleRobot`과 혼동하지 않는다.
+3. 그 **Animator와 같은 GameObject**에서 Add Component → `Robot Animation Event Receiver`를 추가하고 활성 상태로 둔다. player 부모에만 추가하거나 다른 자식에 붙이는 것으로 대체하지 않는다. 이 컴포넌트에 별도 참조 설정은 없다.
+4. 기존 Body는 player, Bridge의 Target Animator·탐색 Controller 연결은 그대로 유지한다. 원본 클립 이벤트를 삭제하거나 Controller를 변경하지 않는다.
+5. Console을 비운 뒤 Play를 실행해 실제 Walk_N이 여러 번 반복되도록 이동시킨다. 메시지가 다른 Animator/오브젝트에서 발생한다면 그 실제 발신 Animator 위치를 확인한다. 새 이동 스크립트나 AudioSource를 추가할 필요는 없다.
+
+이벤트가 Animator의 GameObject에 있는 스크립트 함수를 호출하는 API 계약은 [Unity 6.3 AnimationEvent 공식 문서](https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/animationevent)를 참고한다.
+
+### 검증 결과·수동 시험
+
+| ID | 검사 | 예상 결과 | 현재 결과 |
+|---|---|---|---|
+| AE01 | 실제 FBX 메타의 이벤트 이름/추가 인자 조사 | OnFootstep/OnLand와 위 데이터 확인 | 파일 조사 완료 |
+| AE02 | 전체 Runtime C# 참조 빌드 | 새 AnimationEvent 인자 타입·public 콜백 컴파일 | 통과, 오류 0·경고 0 |
+| AE03 | 기존 대체 환경 회귀 | 이동·취소·탐색·걷기 파라미터 기존 시험 유지 | 52개 통과. native 이벤트 수신 검사는 아님 |
+| AE04 | 사용자 Inspector 연결 후 Walk_N 반복 이동 | OnFootstep 수신기 없음 오류가 더 발생하지 않음, 무음 | 실제 Unity 미실행 |
+| AE05 | 기존 이동·Idle·Esc·탐색·상자 집기 확인 | 수신기가 상태를 바꾸지 않아 기존 동작 유지 | 실제 Unity 미실행 |
+| AE06 | 기존 착지 클립을 별도 시험할 경우 OnLand 확인 | 수신기 없음 오류·음향·상태 변경 없음 | 실제 Unity 미실행. 점프 구현 요구 아님 |
+
+이번에는 신규 .cs/.meta와 CHANGELOG/TEST_PLAN만 변경했다. 실제 클립 재생에 의한 이벤트 디스패치·오류 소멸은 사용자 연결 후 판정한다.
+
+## 2026-11-10 — 반자율 탐색 v0.1
+
+**현재 구현:** 실제 opt-in AgentInteractable 선택, 3초 타이머, 이동·조사, Player 우선, 명시적 중지 억제, 로컬 재개, 실패·조사 기억. **새 탐색의 실제 Unity Play Mode 시험은 전부 미실행**이다. Codex는 실제 마이크·네트워크를 실행하지 않았다.
+
+### 변경 전 백업 결과
+
+`C:\Dev\Capstune_design\_local_backups\VoiceAI-pre-exploration-v01-20261110`에 원본 111개와 별도 BACKUP_MANIFEST.json 1개를 저장했다. 원본 총 크기 13,242,336바이트. 원본·백업 SHA-256 111개 일치, 금지 경로 0개, 복사 직후 Git 상태 유지 확인. 이전 백업은 덮어쓰지 않았다. 스크립트의 완료 메시지에 개수 표기가 누락되어 매니페스트를 별도로 다시 읽고 111개 전체 해시·112개 총 파일 수를 재검증했다.
+
+### 사용자 직접 추가 확인 — 걷기·Idle만 성공
+
+| ID | 근거 | 사용자 실제 보고 | 한계 |
+|---|---|---|---|
+| U07 | 이번 대화의 사용자 직접 Play Mode 보고 | Kyle 외형 연결, RobotAnimatorBridge의 자연스러운 걷기 성공 | Codex 자동 시험 아님. 정밀 파라미터·발 속도 수치는 미제공 |
+| U08 | 동일 사용자 보고 | 이동 완료 후 Idle 전환 성공 | 애니메이션 연결 이후 Esc 취소 회귀는 성공 보고가 없음 |
+
+보고 기록일은 2026-11-10이고 정확한 실행 시간·로그·영상은 미제공이다. 이전 U04/U05는 큐브 시스템 중지 성공 이력이며 새 Bridge 이후 취소 성공으로 확대하지 않는다. 이번 탐색 코드 적용 후에도 같은 장면을 다시 시험해야 한다.
+
+### Inspector 준비 — Codex는 씬을 변경하지 않음
+
+1. Play를 종료하고 ssm.unity에서 **AgentBodyController가 있는 player**를 선택한다. 기존 VoiceAgent·Runner·RobotAnimatorBridge 연결은 유지한다.
+2. Add Component → **Robot Exploration Controller** 추가. Body에 player의 AgentBodyController를 지정한다. KyleRobot 자식에 Body/Runner/탐색 컴포넌트를 중복 추가하지 않는다.
+3. 기본 Idle Delay Seconds=3, Exploration Radius=10을 사용한다. 반경은 로봇 현재 위치를 중심으로 한 3D 거리다. 벽·낙하 없는 열린 공간에서 시험한다.
+4. 실제 box의 AgentInteractable에서 **Allow Autonomous Exploration**을 체크한다. 새 필드는 기존 대상 모두 기본 false이므로 사용자 동의 없이 자동 이동하지 않는다. 대상 ID가 유일하고 해당 GameObject/컴포넌트가 활성인지 확인한다.
+5. 둘 이상 시험하려면 사용자가 시험 씬에서 실제 AgentInteractable 대상과 고유 ID를 준비한다. 같은 거리라면 ordinal ID가 앞선 대상을 선택한다. 조사 완료 대상은 자동 재선택하지 않는다.
+6. Game 뷰에서 작업 로그의 `[Autonomous]`/`[Player]`, 예정 행동, 자동 탐색 중지 플래그를 확인한다. 컴포넌트의 Status/CurrentTargetId/RemainingDelay는 코드에서 제공하는 런타임 조회 속성이다.
+7. 기본 약 3초 후 첫 의도, 추가 1초 후 실제 이동이 예상된다. move_to와 inspect는 각각 의도/1초 대기를 갖는다.
+8. Esc/중지 버튼/텍스트 `중지` 후에는 기다려도 자동 재개하지 않는다. `탐색 재개` 또는 `탐색 계속`을 입력하거나 **탐색 재개 (로컬)** 버튼을 사용한다. 재개도 3초를 새로 센다.
+9. 실패 대상 재시험이 필요하면 Controller 컴포넌트 메뉴 **Reset Failed Exploration Targets**로 실패 ID 기억만 초기화한다. 명시적 중지 억제 해제와는 별개다.
+
+### v0.1 시험 목록
+
+| ID | 절차 | 예상 결과 | 자동 대체 환경 | 실제 Unity |
+|---|---|---|---|---|
+| X01 | 준비 후 무입력 2.9초, 이후 3초 경과 | 조기 작업 없음, 약 3초에 자율 의도·Waiting | 통과 | 미실행 |
+| X02 | 실제 탐색 허용 대상 1개 배치 | 이동·조사, HasBeenInspected=true, 인벤토리/퍼즐 state 불변 | 통과 | 미실행 |
+| X03 | 같은 대상만 둔 채 충분히 대기 | 성공한 동일 대상 무한 재조사 없음 | 통과 | 미실행 |
+| X04 | 후보 둘의 거리·고유 ID 순서 변경 | 미조사 후보 중 거리→ordinal ID의 결정적 선택 | 통과 | 미실행 |
+| X05 | 비활성·opt-out·범위 밖·중복·소지품 대상 | 해당 대상 미선택 | 통과 | 미실행 |
+| X06 | 자율 이동 중 채팅·녹음 시작 | 자율 ID 취소, Player 우선. 처리 중 새 자율 작업 금지 | 통과(채팅·기존 가짜 음성) | 미실행 |
+| X07 | 자율 이동/대기 중 Esc·텍스트 중지 | 이동·걷기 중지, Cancelled, 자동 재개 금지 | 통과(로컬 처리 경로) | 미실행 |
+| X08 | 중지 이후 일반 명령 정상 완료 | 명시적 억제 유지, 자동 탐색 안 함 | 통과 | 미실행 |
+| X09 | 억제 없는 일반 명령 정상 완료 | 실제 Completed 뒤 새 3초를 세고 재개 | 통과 | 미실행 |
+| X10 | `탐색 재개`/재개 버튼 | LLM 없이 억제 해제, 플레이어를 선점하지 않고 Idle에서 3초 대기 | 통과(텍스트·메서드 경로) | 미실행 |
+| X11 | 실제 대상 없음, 데모 상태 fallback=true | 가짜 문·책상 등으로 이동하지 않고 Idle | 통과 | 미실행 |
+| X12 | 자율 출처에 pick_up/drop/open/press/use 등 주입 | Runner에서 전체 거부, 실제 상태 변경 없음 | 통과 | 미실행 |
+| X13 | 대기 후 탐색 허용 해제/대상 범위 변경 | 최신 재검증으로 거부, 다음 행동 차단 | 통과 | 미실행 |
+| X14 | 속도 0 등 자율 실패 | 해당 ID를 재시도하지 않고 다른 후보 또는 Idle | 통과 | 미실행 |
+| X15 | 탐색 중 걷기/정지·기존 채팅·음성·집기 | 기존 Body/Bridge/API 경로 유지, 상태 중복 실행 없음 | 기존 35개 및 신규 회귀 통과 | 미실행 |
+| X16 | 이전 자율 종료 알림을 새 Player 뒤에 재전달 | 새 작업·타이머를 변경하지 않음 | 통과 | 미실행 |
+
+실제 수행한 검증: 설치 Unity 6.3 DLL 참조 전체 런타임 빌드 오류 0·경고 0, 가짜 네트워크·Unity 대체 환경 **52개 통과(기존 35 + 탐색 17)**. 새로운 LLM 호출은 자율 경로에 없으며 자동 시험에서도 요청 수 0을 확인했다. native 엔진·물리·시야·마이크·발 모양을 이 결과로 대신하지 않는다.
+
+보수적 정책: 플레이어 Failed/Rejected/Cancelled 후 자동 재개하지 않으며 명시 재개나 다음 정상 완료를 기다린다. stop 억제는 정상 완료로도 해제되지 않는다. 조사 기억은 런타임 인스턴스 기준, 실패 기억은 탐색 컴포넌트 수명 기준이다. 영구 저장·장애물 경로 탐색은 없다.
+
+## 2026-11-10 — Kyle 걷기 연결 검증·Inspector 설정
+
+걷기 연결 코드 작성 당시 Codex의 native Animator/Play Mode 시험은 미실행이었다. 이후 사용자 직접 걷기·완료 Idle 성공 보고를 위 U07/U08에 추가했다. 연결 이후 Esc 회귀는 미확인이다. 아래 U01~U06은 이전 큐브 시스템 시험이며 새 탐색 성공으로 확대하지 않는다.
+
+실제 수행: Unity 6.3 DLL 참조 전체 런타임 C# 빌드 오류 0·경고 0. 대체 환경 자동 검사 기존 25개+신규 10개=35개 통과, 최종 실패 없음. Animator 대체 객체는 파라미터만 기록하며 뼈대·클립·BlendTree를 native 재생하지 않는다. 코드·설정 재현은 [Validation/README.md](Validation/README.md)를 따른다.
+
+### 실제 에셋과 연결 대상
+
+- Controller: `Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller`.
+- 모델: `Assets/Starter Assets/Runtime/SpaceRobotKyle/Models/KyleRobot.fbx`.
+- 실제 Float: Speed, MotionSpeed. 실제 Bool: Grounded, Jump, FreeFall.
+- 기본 상태 `Idle Walk Run Blend` 안의 1D Speed 임계값 0/2/6은 Idle/Walk_N/Run_N이다. 상태 속도 배수는 MotionSpeed다.
+- Kyle와 클립은 Humanoid importer 설정이다. 실제 Avatar 유효·리타기팅·클립 재생은 Inspector와 Play Mode 확인이 필요하다.
+- 저장된 씬에는 KyleRobot 이름의 Animator가 두 개 있다. Controller가 연결된 것(Root Motion=0)을 Bridge 대상으로 지정한다. Controller 없는 다른 Animator(Root Motion=1)가 같은 뼈를 제어하지 않는지 확인한다. 코드는 이를 임의 삭제·비활성화하지 않는다.
+
+### 초보자용 Inspector 설정 — 사용자가 수행할 작업
+
+1. Play를 종료한 상태에서 `Assets/Scenes/ssm.unity`를 연다. 기존 변경사항은 유지한다.
+2. Hierarchy에서 **기존 AgentBodyController가 있는 player**를 선택한다. Add Component를 눌러 `Robot Animator Bridge`를 추가한다. KyleRobot 자식에 두 번째 Body나 Runner를 추가하지 않는다.
+3. Bridge의 **Body** 칸에 player의 AgentBodyController를 연결한다. 같은 GameObject면 코드가 자동으로 찾지만 명시 연결을 권장한다.
+4. 저장된 씬 기준 **player/KyleRobot**의 Animator를 Inspector에서 확인한다. **Controller=StarterAssetsThirdPerson, Avatar=KyleRobotAvatar**인 Animator를 Bridge의 **Target Animator** 칸에 연결한다. `player/KyleRobot/Geometry/KyleRobot`에도 Controller 없는 Animator가 있으므로 이름만 보고 고르지 않는다. 필요하면 Inspector를 두 개 열어 한쪽에 player를 고정한 뒤 다른 쪽의 Animator 컴포넌트 제목을 Target Animator 칸으로 드래그한다.
+5. 대상 Animator의 **Apply Root Motion을 끈다**. 코드도 런타임에 끄지만 저장 설정을 일치시킨다. 다른 Animator가 같은 모델 뼈를 중복 제어한다면 해당 컴포넌트만 시험 인스턴스에서 비활성화한다. Renderer/뼈대가 있는 GameObject 전체를 끄지 않는다.
+6. Character Controller는 지금처럼 비활성화하고 Player Input·외부 이동 컨트롤러를 추가하지 않는다. 위치·회전은 Body만 변경해야 한다. 원본 Starter Assets Controller는 편집하지 않는다.
+7. Bridge 기본값: Walk Reference Speed=2, Walk Blend Seconds=0.12, Stationary Threshold=0.01. Animator Speed는 0~2만 사용한다. MotionSpeed는 실제 수평 속도/Reference 값이다. Body 속도 3이면 1.5배이며 발맞춤에 따라 Reference 값을 보정한다. 2는 초기 보정값이고 클립 실제 평균 속도 측정값은 아니다.
+8. Play 후 Game 뷰에 포커스를 두고 아래 항목을 시험한다. Animator 창과 Parameters에서 값도 관찰한다. 새 코드를 적용한 씬 저장은 사용자가 결정하며 Codex는 씬을 수정하지 않았다.
+
+### Kyle 실제 Play Mode 시험 목록 — 사용자 확인 범위만 반영
+
+| ID | 준비·조작 | 예상 결과 | 자동 대체 환경 | 실제 Unity 결과 |
+|---|---|---|---|---|
+| K01 | Play 후 명령 없이 대기 | Speed=0, MotionSpeed=1, Grounded=true, Jump/FreeFall=false. Idle 유지 | 파라미터 검사 통과 | 미실행 |
+| K02 | `앞으로 다섯 걸음 이동해` | 1초 대기 후 이동·진행 방향 회전·Walk. Speed는 최대 2, Run(6) 미선택 | 실제 변위/속도·상한 검사 통과 | 자연스러운 걷기 성공(U07, 사용자). 파라미터·명령 전문 세부는 미확인 |
+| K03 | 이동 완료까지 대기 | Speed 즉시 0, MotionSpeed=1로 Idle 복귀. 영구 걷기·Idle 동결 없음 | 완료 초기화 통과 | 이동 완료 Idle 전환 성공(U08, 사용자). 프레임/파라미터 계측 미보고 |
+| K04 | 이동 중 Esc | 위치 중지·Cancelled와 함께 걷기 파라미터 즉시 0. 다음 프레임을 기다리는 초기화 아님 | RequestStop 경로 통과 | 미실행 |
+| K05 | 예고 후 1초 대기 중 관찰·Esc | 대기 중 Idle. 취소 후 이동·Walk 없음 | 대기/취소 통과 | 미실행 |
+| K06 | 채팅 `빨간 상자를 집어`, 이후 `빨간 상자를 내려놓아` | 접근 때만 Walk, 정지 조작 때 Idle. 기존 집기·인벤토리 유지 | 가짜 채팅 집기/내려놓기 통과 | 미실행 |
+| K07 | V키 음성으로 이동·집기 | 기존 실제 STT→해석→행동과 걷기 연결 모두 유지 | 기존 가짜 음성 회귀 통과 | 미실행 |
+| K08 | `왼쪽으로 두 걸음 이동해`, `뒤로 두 걸음 이동해` | 명령 시작 당시 축으로 목적지를 잡고 그 방향으로 몸을 돌림. 다음 방향 기준은 회전 후 로봇 방향 | 방향 시험 통과(회전 보간 대체) | 미실행 |
+| K09 | Target Animator를 비우거나 다른 Controller로 시험 | 예외로 이동을 중단하지 않음. 잘못된 파라미터 계약은 경고, 무참조는 출력 생략 | 통과 | 미실행 |
+| K10 | Body 속도 1/3 등으로 바꿔 비교 | 측정 속도에 따라 Walk 재생 배수가 변함. Root Motion 없이 루트 위치는 Body가 소유 | 배수·Root Motion 값 검사 통과 | 미실행 |
+
+걷기 진입은 기본 0.12초 가중치 보간을 사용한다. 정지·취소는 잔여 걷기를 방지하기 위해 Speed 값을 즉시 0으로 전달한다. **포즈 전환의 자연스러움·발 미끄러짐·회전과 발 방향·Avatar 유효성은 자동 검사로 판정하지 않는다.** Controller·모델·Avatar·중복 Animator를 먼저 확인하고 보정한다. 집기 전용 애니메이션·손 소켓·달리기·점프·충돌/중력은 미구현이다.
+
+## 0. 1차 구현 후 실제 검증 기록 (2026-11-09 이력)
+
+실행·취소 C# 구현 이후 **사용자가 직접 수행한 Unity 시험 6개를 성공으로 보고했다.** 아래 사용자 보고 기록과 Codex의 이전 참조 빌드·대체 환경 자동 시험은 출처를 분리한다. 11월 9일 문서 갱신에서는 Codex가 Unity를 실행하거나 자동 시험을 재실행하지 않았다. 11월 10일 추가 빌드/35개 자동 시험 결과는 위 걷기 절을 따른다. “현재 코드에 Runner가 없다”는 종전 전제는 기준 커밋 당시 설명이며 현재 구현은 ARCHITECTURE를 따른다.
+
+| 수행한 검사 | 실제 결과 | 범위·한계 |
+|---|---|---|
+| 전체 런타임 C# 참조 빌드 | 통과, 오류 0·경고 0 | 설치 Unity 6000.3.25f1 DLL 참조, .NET 10 SDK. Unity Editor 자체 컴파일은 아님 |
+| 네트워크·Unity 대체 환경 동작 시험 | 25개 통과, 최종 실패 0 | 실제 Runner/Body/VoiceAgent/Brain 소스 사용. 키·마이크·HTTP·네이티브 엔진 대체 |
+| 변경 diff 공백 검사 | 이번 변경 범위의 git diff --check 통과 | 기준 씬·meta 공백은 수정하지 않음 |
+| 실제 Unity / 실제 마이크·STT·AI 해석·행동 | 사용자 직접 시험 성공 보고 | 아래 U01~U06에 한정. Codex 직접 실행·자동화 결과가 아님 |
+
+재현 명령과 도구는 [Validation/README.md](Validation/README.md), 실제 자동 사례는 [BehaviorTests.cs](Validation/BehaviorTests.cs)를 참고한다. 자동 시험 통과를 아래 표의 Unity 통과로 옮겨 적지 않는다.
+
+### 사용자 직접 수행한 Unity 시험 — 성공 보고
+
+보고 기록일: 2026-11-09 (Asia/Seoul). 수행자: 사용자. 근거: 이번 대화의 사용자 시험 결과 보고. 실제 시험 일시·OS·마이크 모델·개별 명령 전문·응답 ID·로그/영상은 제공되지 않았다. 프로젝트 버전 기록은 6000.3.25f1이며 실제 실행 환경의 세부 값은 별도 확인하지 않았다.
+
+| ID | 사용자가 직접 시험한 항목 | 실제 보고 결과 | 판정 |
+|---|---|---|---|
+| U01 | Unity Play Mode 실행 및 Console 확인 | 정상 실행, Console 오류 0개 | 성공 — 사용자 보고 |
+| U02 | 채팅 명령으로 빨간 상자 집기 | 집기 성공 | 성공 — 사용자 보고 |
+| U03 | AI 명령 해석 후 큐브 이동·상자 집기 | 해석→실제 이동→집기 성공 | 성공 — 사용자 보고 |
+| U04 | 이동 도중 Esc 입력 | 이동 중지 및 Cancelled 처리 성공 | 성공 — 사용자 보고 |
+| U05 | 행동 예고 후 기본 1초 대기 중 Esc 입력 | 행동 취소 성공 | 성공 — 사용자 보고 |
+| U06 | 마이크 음성 명령 입력 | 실제 STT→AI 해석→행동 실행 성공 | 성공 — 사용자 보고 |
+
+U05는 예고·대기 중 취소 경로의 성공이다. 정밀 시간 측정으로 1.000초와 프레임 경계를 확인했다는 뜻은 아니다. U06은 실제 마이크·STT 연결 성공이며 음성 중지·STT 처리 중 취소까지 검증한 것은 아니다. Console 오류 0개를 모든 타깃·모든 경로의 무결함으로 확대하지 않는다.
+
+### 아직 실제 Unity 시험 성공을 보고받지 않은 항목
+
+- 중지 버튼·로컬 텍스트 중지, 초기화 실패 상태 중지, LLM/STT 처리 중 취소, API 없는 음성 중지.
+- 취소 후 늦은 응답·역순 응답·오래된 오류의 폐기와 기억·신뢰도 보호, 새 명령 선점.
+- 내려놓기·조사·복합 행동, 이벤트 중복 횟수, 실패 후 후속 행동 차단, 대상/권한 변경 재검증.
+- 오브젝트 비활성화·파괴·ResetConversation, 오류·무음·장치 없음·네트워크 장애.
+- 정밀 1초 측정, 전체 규칙 기반 오해, Kyle 연결 이후 Esc 회귀, 새 자율 탐색·퍼즐·힌트·TTS. Kyle 걷기·완료 Idle 자체는 U07/U08 성공 보고를 별도로 반영했다.
+
+일부는 이전 대체 환경 자동 시험으로 통과했지만 실제 Unity 성공으로 승격하지 않는다. Robot Kyle 준비 사항은 [통합 계획](ROBOT_KYLE_INTEGRATION_PLAN.md)을 따른다.
+
+### Unity Inspector 준비 — 씬 파일은 이번 작업에서 변경하지 않음
+
+1. `Assets/Scenes/ssm.unity`를 연다. Console 컴파일 오류를 먼저 확인한다. Newtonsoft.Json 패키지는 현재 작업 폴더에는 있지만 아직 커밋되지 않은 의존성이다.
+2. `GameObject`의 `VoiceAgent`, `SceneStageContext`, `VoiceAgentDebugUI`가 활성인지 확인한다. 시스템 프롬프트 경로는 기존 값을 유지한다.
+3. `player`의 `AgentBodyController.voiceAgent`에 위 VoiceAgent를 드래그하는 것이 권장된다. 기존 단일 VoiceAgent 씬은 빈 참조여도 같은 씬의 유일한 후보를 자동 연결한다. 여러 후보가 있으면 직접 지정해야 한다.
+4. `box`의 AgentInteractable ID는 `red_box`, 이름은 `빨간 상자`, allowedVerbs는 `pick_up`, `drop`인지 확인한다. ID 중복이 없어야 한다.
+5. Runner는 VoiceAgent GameObject에 실행 중 자동 추가되므로 필수 수동 추가 설정은 없다. 실행 전 값을 편집하려면 같은 GameObject에 AgentActionRunner를 미리 추가하고 Intent Delay Seconds=1로 둔다. Body에 따로 Runner를 추가하지 않는다.
+6. 직선 이동 시험은 평평하고 장애물 없는 공간, timeScale=1, Body Move Speed=3에서 수행한다. 상자가 처음부터 너무 가까우면 이동 중 취소를 관찰하기 어려우므로 `앞으로 열 걸음 이동해`로 시험한다.
+7. Play 후 Game 뷰에 포커스를 둔다. 채팅창 포커스를 벗어나 V키를 누르고 말한 뒤 놓는다. Esc는 채팅 포커스 중에도 중지를 시도하며 별도 즉시 중지 버튼도 사용할 수 있다.
+
+### 1차 수동 시험 절차·예상 결과와 현재 실제 보고 범위
+
+| 항목 | 입력·조작 | 예상 결과 | 실제 Unity 결과 |
+|---|---|---|---|
+| 정상 채팅 | `빨간 상자를 살펴봐`, `빨간 상자를 집어`, 이후 `빨간 상자를 내려놓아` | 해석 대사와 코드 생성 의도를 구분해서 표시. 집기·내려놓기 각각 한 번 | 상자 집기 성공(U02/U03, 사용자). 조사·내려놓기·횟수 측정은 미보고 |
+| 1초 대기 | 명령 전송 후 의도/Waiting 관찰 | 각 행동 의도 뒤 1초 이전 이동·조작 없음. 접근 포함 집기는 접근 직후 다시 검사 | 예고 후 기본 대기 중 취소 성공(U05, 사용자). 정밀 측정은 미보고 |
+| 대기 중 취소 | Waiting에서 즉시 중지 버튼 또는 Esc | Cancelled와 멈춤 표시, 이후 행동 없음. 필요하면 런타임 Runner Delay를 3으로 늘려 관찰 후 1로 복구 | Esc 취소 성공(U05, 사용자). 버튼은 미보고 |
+| 이동 중 취소 | `앞으로 열 걸음 이동해`, 이동 중 `중지` 또는 Esc | 처리 프레임 이후 추가 이동·후속 행동 없음 | Esc 이동 중지·Cancelled 성공(U04, 사용자). 텍스트 경로는 미보고 |
+| LLM 중 취소 | Thinking에서 `중지` 입력 | 새 API 없이 즉시 중지. 대체 오류 대사나 늦은 턴 이벤트 없음 | 미실행 |
+| 새 명령 선점 | 이동·Thinking·녹음 중 다른 채팅 전송 | 이전 작업 Cancelled, 새 ID만 실행 | 미실행 |
+| 늦은 응답 | 실제 요청 중 중지 후 응답 대기. 결정적 재현은 가짜 전송 함수의 TCS를 취소 뒤 완료시키는 자동 시험 사용 | 취소된 턴 대사·기억·신뢰도 반영 0회. 현재 작업 유지 | 미실행 |
+| 음성 회귀 | V키로 `빨간 상자를 살펴봐` 발화 | STT→LLM→의도·대기·실행, 중간 중지 가능. 실제 마이크 권한 확인 | 실제 마이크 STT→해석→행동 성공(U06, 사용자). 발화 전문·키 조작·중간 취소는 미보고 |
+| 검증 실패 | Waiting 동안 대상 AgentInteractable 비활성화 또는 허용 동사 제거 | Rejected와 사유 표시, 후속 행동 중단 | 미실행 |
+
+현재 자동 시험 25개: 의도/대기, 대기 취소, 이동 취소, stop 연쇄 차단, 대상 비활성화, 접근 중 권한 변경, 순차 집기/내려놓기, 속도 오류, 중복 ID, 미지원 동사, API 없는 텍스트 중지, 채팅 선점, 늦은 LLM, 역순 응답, 오래된 오류, 늦은 STT, 가짜 음성 정상/취소, Reset/Disable, Prepare/Commit 1회, 취소 무시 전송 방어, 의도 이벤트 중 취소, 구독자 예외 격리, 준비 후 취소, 거부/null 행동, Body 비활성화.
+
+후속 미구현: 퍼즐(PZ01~PZ05), 전체 대상 선택 규칙(M02~M04), TTS·전용 이동 컨트롤러. 자율 탐색 v0.1은 구현했고 X01~X16/A01~A06 실제 Unity 시험은 대기 중이다. Kyle 걷기·완료 Idle 사용자 보고만 U07/U08로 확인했다.
+
 ## 1. 현재 실행 결과와 시험 전제
 
-**아래 모든 사례의 실제 Unity 결과는 미실행이다.** 예상 결과는 목표 계약이며 현재 기능이 통과했다는 뜻이 아니다. 문서 검사는 Unity 시험을 대신하지 않는다.
+아래 표는 사용자 보고와 겹치는 범위만 성공 또는 일부 확인으로 갱신했다. **미실행 표시는 실제 Unity 시험 결과를 아직 보고받지 않았다는 뜻**이다. 복합 사례의 일부 성공을 전체 통과로 처리하지 않는다. 문서 검사는 Unity 시험을 대신하지 않는다.
 
-현재 코드에 있는 채팅·음성·상자 이동/집기부터 기준을 기록한다. Runner·로컬 중지·규칙 기반 오해·반자율 탐색·퍼즐 시험은 해당 구현 이후 수행한다. 지금은 시험용 씬·코드·설정도 만들거나 변경하지 않았다.
+채팅·음성·상자 이동/집기와 Runner·로컬 중지, 반자율 탐색 v0.1은 구현되어 수동 검증 대상이다. 전체 규칙 기반 오해·퍼즐은 후속이다. 씬과 프로젝트 설정은 변경하지 않았다. 자동 검증 코드는 Docs/VoiceAI/Validation에 있다.
 
 - 환경 기록: Unity 버전, 플랫폼, timeScale, 사용 씬, 시험 대상 코드 버전, 가짜/실제 API 구분.
 - 기존 시험 씬 후보: `Assets/Scenes/ssm.unity`. 현재 red_box 중심이며 버튼·서랍·열쇠·문은 없다.
@@ -20,8 +226,8 @@
 
 | ID | 절차 | 예상 결과 | 실제 Unity 결과 |
 |---|---|---|---|
-| C01 | 채팅으로 “빨간 상자를 집어” 입력 | 올바른 대상·행동 해석, 의도→1초→집기. 해석 이벤트 1회·실행 1회 | 미실행 |
-| C02 | V키 녹음 후 같은 명령 발화, 키 해제 | 전사→해석→실행, 녹음부터 같은 작업 ID 유지. 전사 오류와 실행 오류 구분 | 미실행 |
+| C01 | 채팅으로 “빨간 상자를 집어” 입력 | 올바른 대상·행동 해석, 의도→1초→집기. 해석 이벤트 1회·실행 1회 | 채팅 집기·이동 성공(U02/U03, 사용자). 이벤트 횟수·정밀 시간은 미확인 |
+| C02 | V키 녹음 후 같은 명령 발화, 키 해제 | 전사→해석→실행, 녹음부터 같은 작업 ID 유지. 전사 오류와 실행 오류 구분 | 실제 STT→해석→행동 성공(U06, 사용자). 동일 ID·오류 분리·키 조작 세부는 미확인 |
 | C03 | 무음·0.3초 미만 녹음, 마이크 없음 각각 시험 | 불필요 LLM 호출·행동 없음. 오류 후 새 입력 가능, 처리 상태 고착 없음 | 미실행 |
 | C04 | LLM 처리 중 채팅 “중지”, 별도 버튼·키 각각 시험 | 로컬 처리, 즉시 작업 취소. STT/LLM 완료를 기다리지 않음 | 미실행 |
 | C05 | 키 초기화 실패 상태에서 중지 버튼 | 예외 없이 중지 경로 동작. API 초기화 조건으로 막히지 않음 | 미실행 |
@@ -35,9 +241,9 @@
 | V02 | item 없는 use, 소지하지 않은 대상 drop, asking/refused에 행동 포함 | 부적절 실행 없음. 미지원 use는 구현 전 거부, 구현 후 필수 item 검사 | 미실행 |
 | V03 | ID 중복·없는 대상·가상 데모 대상에 실행 요청 | 유일한 실제 대상을 보장하지 못하면 거부, 가상 대상 이동 성공으로 보고하지 않음 | 미실행 |
 | V04 | 집기→내려놓기 계획 | 두 번째 행동은 갱신된 인벤토리 검사. 초기 스냅샷 때문에 잘못 거부하지 않음 | 미실행 |
-| E01 | 대상 이동·집기 정상 수행 | 각 행동 의도 후 기본 1초. 결과·작업 종료 이벤트 각 규칙에 맞게 1회 | 미실행 |
-| E02 | 의도 후 약 0.5초에 중지 | 아직 위치·퍼즐 변화 없음. 남은 행동 폐기 | 미실행 |
-| E03 | 이동 도중 중지 후 새 명령 | 추가 이동 중단, 후속 집기 없음. 새 작업만 수행 | 미실행 |
+| E01 | 대상 이동·집기 정상 수행 | 각 행동 의도 후 기본 1초. 결과·작업 종료 이벤트 각 규칙에 맞게 1회 | 이동·집기 성공(U03, 사용자). 각 이벤트 횟수는 미확인 |
+| E02 | 의도 후 약 0.5초에 중지 | 아직 위치·퍼즐 변화 없음. 남은 행동 폐기 | 대기 중 Esc 취소 성공(U05, 사용자). 정확한 취소 시각·복합 후속 행동은 미확인 |
+| E03 | 이동 도중 중지 후 새 명령 | 추가 이동 중단, 후속 집기 없음. 새 작업만 수행 | 이동 중 Esc·Cancelled 성공(U04, 사용자). 새 명령·후속 목록 차단은 미확인 |
 | E04 | 첫 행동 대상 소멸, 다음 행동 포함 | 첫 실패 후 연쇄 중단, 후속 행동 미실행 | 미실행 |
 | E05 | 대기 중 대상 비활성화·허용 동사/신뢰도 변경, 접근 후 집기 직전 조건 변경 | 대기 후·조작 직전 최신 검증, 거부 이유 기록 | 미실행 |
 | E06 | moveSpeed=0, 도달 불가 대상 | 무한 실행 방지·실패 종료. 실제 경로 안전성은 이동 구현 후 별도 검증 | 미실행 |
@@ -97,10 +303,12 @@
 
 ## 8. 실제 결과 기록 양식
 
-전체 결과: **Unity 미실행 / API 미호출 / 테스트용 코드·씬 미작성**.
+현재 결과: **사용자 직접 Unity 시험 U01~U08 성공 보고 / Codex 대체 환경 자동 시험 52개 통과 / Codex의 Unity 직접 실행 없음**. 애니메이션 연결 이후 Esc와 새 탐색 X01~X16의 실제 Play Mode 판정은 대기 중이다.
 
 | 실행일 | 사례 ID | 코드 버전·씬·환경 | 가짜/실제 API | 관측값·증거 경로 | 판정(통과/실패/보류) | 결함·후속 조치 |
 |---|---|---|---|---|---|---|
 | 미실행 | 미기록 | 미기록 | 미사용 | 없음 | 보류 | 해당 구현 후 실행 |
+
+사용자 보고 U01~U06의 근거는 0절에 별도로 보존했다. 원본 로그·영상·정확한 실행일은 미제공이므로 임의로 채우지 않았다.
 
 증거에는 키·인증 헤더·비밀 파일·불필요한 사용자 발화 원문을 넣지 않는다. 예상과 다르면 문서상 통과로 처리하지 말고 관측 사실과 원인을 분리해 기록한다.

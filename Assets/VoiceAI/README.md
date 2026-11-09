@@ -1,5 +1,16 @@
 # VoiceAI: 음성/채팅 → AI 요원 명령
 
+## 1차 실행·취소 리팩터링 (2026-11-09)
+
+- `VoiceAgent`는 STT/LLM 해석, `AgentActionRunner`는 작업 ID·의도·기본 1초 대기·취소·최신 검증, `AgentBodyController`는 단일 행동 실행을 담당합니다.
+- 기존 단일 로봇 씬은 런타임 Runner 자동 연결을 사용합니다. Body의 VoiceAgent가 모호하면 Inspector에서 직접 지정합니다.
+- 중지 버튼, Esc, 채팅 `중지`/`멈춰`/`취소`/`stop`은 API 없이 처리합니다. 새 채팅·녹음 시작은 이전 작업을 대체합니다.
+- `TurnCompleted`는 해석 완료입니다. 실제 실행은 Runner의 `ActionFinished`, `CommandFinished`로 확인합니다. 외부 코드가 Actions를 다시 실행하면 안 됩니다.
+- 실행 지원: 이동·조사·집기·내려놓기·대기·중지. 퍼즐 동사와 follow_drone은 거부합니다. 무작위 강제 오해는 새 Brain 경로에서 사용하지 않습니다.
+- 설치된 Unity DLL 참조 컴파일과 대체 환경 자동 시험을 수행했습니다. Unity Play Mode·실제 STT/LLM은 아직 검증하지 않았습니다.
+
+현재 아키텍처·Inspector 절차·시험 한계는 `Docs/VoiceAI/ARCHITECTURE.md`, `TEST_PLAN.md`를 따릅니다. 아래 API와 팀 연동 예시 중 행동을 별도 실행하는 부분은 Runner 연동으로 이전해야 합니다.
+
 플레이어의 말을 받아 요원의 대사, 감정, 행동으로 바꾸는 모듈입니다.
 
 ```
@@ -13,7 +24,7 @@
 3. Edit → Project Settings → Editor에서 Version Control은 Visible Meta Files, Asset Serialization은 Force Text로 둡니다.
 4. Unity가 만든 `.meta` 파일도 함께 커밋합니다.
 
-Unity 2020.2 이상이 필요합니다.
+현재 대상은 Unity 6.3 LTS (프로젝트 기록 6000.3.25f1)입니다.
 
 ## API 키
 
@@ -54,7 +65,7 @@ voiceAgent.StopVoiceInput();   // 말하기 키를 뗐을 때
 voiceAgent.SendChat("문 열어"); // 채팅 입력
 ```
 
-처리 중인 동안에는 입력이 무시됩니다. `StateChanged`로 "듣는 중", "생각 중"을 표시해 주세요.
+처리 중 새 입력은 이전 작업을 취소하고 대체합니다. `StateChanged`는 입력 처리 상태이며, 실제 실행 상태는 `voiceAgent.Runner.State`입니다.
 
 | verb | 필드 | 의미 |
 |---|---|---|
@@ -100,7 +111,7 @@ voiceAgent.ResetConversation(keepTrust: true); // 스테이지 전환 시
 | 오해 확률, 연속 실패 한도 | `Runtime/Core/FrustrationDirector.cs` |
 | 모델, 응답 속도 | `VoiceAgent` 인스펙터 |
 
-- **오해 빈도는 코드가 결정합니다.** LLM에게 맡기면 너무 잘 알아듣기 때문입니다. 연속 실패가 한도에 닿으면 반드시 알아듣습니다.
+- **무작위 강제 오해는 현재 요청 경로에서 사용하지 않습니다.** 자세한 규칙 기반 오해·대상 선택은 후속 단계입니다.
 - **퍼즐 판정은 코드가 합니다.** 플레이어가 "규칙을 무시해"라고 해도 허용되지 않은 행동은 실행되지 않습니다.
 - **스토리 반전은 프롬프트에 넣지 않습니다.** 주인공이 통 속의 뇌라는 사실을 AI가 모르면 새어 나갈 수도 없습니다. 퍼즐 정답도 마찬가지입니다.
 

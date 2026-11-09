@@ -56,6 +56,7 @@ namespace AgentEscape.VoiceAI
         {
             for (int attempt = 1; ; attempt++)
             {
+                cancellation.ThrowIfCancellationRequested();
                 using (var request = new UnityWebRequest(BaseUrl + path, UnityWebRequest.kHttpVerbPOST))
                 {
                     request.uploadHandler = new UploadHandlerRaw(body) { contentType = contentType };

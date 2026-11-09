@@ -15,10 +15,10 @@ namespace AgentEscape.VoiceAI
         private const string ChatFieldName = "VoiceAIChat";
         private static readonly string[] SampleCommands =
         {
-            "책상 위에 카드 좀 집어 와",
-            "카드로 출구 문 열어 줘",
-            "야 이 고철아 빨리 움직여",
-            "빨간 버튼 눌러 봐"
+            "빨간 상자를 집어",
+            "빨간 상자를 내려놓아",
+            "앞으로 다섯 걸음 이동해",
+            "빨간 상자를 살펴봐"
         };
 
         public KeyCode pushToTalkKey = KeyCode.V;
@@ -33,23 +33,44 @@ namespace AgentEscape.VoiceAI
         private void Awake()
         {
             _agent = GetComponent<VoiceAgent>();
-            SetImeMode(IMECompositionMode.On);
-            _agent.PlayerTranscribed += text => Append("플레이어(음성): " + text);
-            _agent.TurnCompleted += ShowTurn;
-            _agent.ErrorOccurred += message => _lastError = message;
-            _agent.StateChanged += state =>
-            {
-                if (state == VoiceAgentState.Transcribing || state == VoiceAgentState.Thinking)
-                {
-                    if (_requestStartedAt == 0f) _requestStartedAt = Time.realtimeSinceStartup;
-                }
-            };
         }
 
-        private void OnDestroy()
+        private void OnEnable()
         {
+            SetImeMode(IMECompositionMode.On);
+            _agent.PlayerTranscribed += ShowTranscription;
+            _agent.TurnCompleted += ShowTurn;
+            _agent.ErrorOccurred += ShowError;
+            _agent.StateChanged += ShowState;
+            _agent.LocalNotice += Append;
+            _agent.Runner.IntentAnnounced += ShowIntent;
+            _agent.Runner.ActionFinished += ShowAction;
+            _agent.Runner.CommandFinished += ShowCommand;
+        }
+
+        private void OnDisable()
+        {
+            _agent.PlayerTranscribed -= ShowTranscription;
+            _agent.TurnCompleted -= ShowTurn;
+            _agent.ErrorOccurred -= ShowError;
+            _agent.StateChanged -= ShowState;
+            _agent.LocalNotice -= Append;
+            _agent.Runner.IntentAnnounced -= ShowIntent;
+            _agent.Runner.ActionFinished -= ShowAction;
+            _agent.Runner.CommandFinished -= ShowCommand;
             SetImeMode(IMECompositionMode.Auto);
         }
+
+        private void ShowTranscription(string text) => Append("플레이어(음성): " + text);
+        private void ShowError(string message) => _lastError = message;
+        private void ShowState(VoiceAgentState state)
+        {
+            if (state == VoiceAgentState.Recording || state == VoiceAgentState.Thinking)
+                _requestStartedAt = Time.realtimeSinceStartup;
+        }
+        private void ShowIntent(string intent) => Append("의도: " + intent);
+        private void ShowAction(AgentExecutionResult result) => Append("행동 #" + result.CommandId + "/" + result.ActionIndex + " " + result.Outcome + ": " + result.Message);
+        private void ShowCommand(AgentExecutionResult result) => Append("작업 #" + result.CommandId + " [" + result.Source + "] " + result.Outcome + ": " + result.Message);
 
         // 한글 조합 입력을 켠다. 입력 시스템 설정에 따라 지원되지 않아도 시험 화면은 계속 동작해야 한다.
         private static void SetImeMode(IMECompositionMode mode)
@@ -92,6 +113,7 @@ namespace AgentEscape.VoiceAI
         private void Append(string line)
         {
             _log += "\n" + line;
+            if (_log.Length > 16000) _log = _log.Substring(_log.Length - 16000);
             _scroll.y = float.MaxValue;
         }
 
@@ -101,6 +123,12 @@ namespace AgentEscape.VoiceAI
 
             GUILayout.BeginArea(new Rect(10, 10, Mathf.Min(720, Screen.width - 20), Screen.height - 20), GUI.skin.box);
             GUILayout.Label("상태: " + _agent.State + "   신뢰도: " + _agent.Trust);
+            GUILayout.Label("실행: " + _agent.Runner.State + "   작업: " + _agent.Runner.CurrentCommand);
+            GUILayout.Label("출처: " + _agent.Runner.CurrentSource + "   자동 탐색 중지: " + _agent.Runner.AutonomySuppressed);
+            GUILayout.Label("예정: " + _agent.Runner.PendingIntent);
+            GUILayout.Label("최근 결과: " + _agent.Runner.LastResult);
+            bool stop = GUILayout.Button("즉시 중지 (Esc)");
+            bool resume = GUILayout.Button("탐색 재개 (로컬)");
             if (_lastError.Length > 0) GUILayout.Label("오류: " + _lastError);
 
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.ExpandHeight(true));
@@ -128,6 +156,8 @@ namespace AgentEscape.VoiceAI
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
 
+            if (stop) { _agent.RequestStop(); return; }
+            if (resume) { _agent.ResumeExploration(); return; }
             if (toggleRecording) ToggleRecording();
             if (sample != null) Send(sample, false);
             else if (submit && _chat.Trim().Length > 0) Send(_chat.Trim(), true);
@@ -139,7 +169,7 @@ namespace AgentEscape.VoiceAI
             {
                 _agent.StopVoiceInput();
             }
-            else if (_agent.State == VoiceAgentState.Idle)
+            else
             {
                 _lastError = "";
                 _agent.StartVoiceInput();
@@ -163,9 +193,11 @@ namespace AgentEscape.VoiceAI
         private void HandlePushToTalk()
         {
             var current = Event.current;
-            if (current.keyCode != pushToTalkKey || GUI.GetNameOfFocusedControl() == ChatFieldName) return;
+            if (current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape)
+            { _agent.RequestStop(); current.Use(); return; }
+            if (current.keyCode != pushToTalkKey) return;
 
-            if (current.type == EventType.KeyDown && _agent.State == VoiceAgentState.Idle)
+            if (current.type == EventType.KeyDown && _agent.State != VoiceAgentState.Recording && GUI.GetNameOfFocusedControl() != ChatFieldName)
             {
                 _lastError = "";
                 _agent.StartVoiceInput();

@@ -24,7 +24,13 @@ namespace AgentEscape.VoiceAI
         [Range(0, 100), Tooltip("이 신뢰도 미만이면 요원이 조작을 거부한다.")]
         public int minTrust;
 
-        private void OnEnable() { ActiveItems.Add(this); }
+        [Tooltip("자동 탐색의 이동·조사 대상으로 허용합니다. 집기·버튼 조작 권한은 부여하지 않습니다.")]
+        public bool allowAutonomousExploration = false;
+        // 런타임 관찰 기억이며 퍼즐 state와 분리한다. 새 Play 세션/인스턴스에서 초기화된다.
+        public bool HasBeenInspected { get; private set; }
+        internal void MarkInspected() { HasBeenInspected = true; }
+
+        private void OnEnable() { if (!ActiveItems.Contains(this)) ActiveItems.Add(this); }
         private void OnDisable() { ActiveItems.Remove(this); }
 
         public StageObject ToStageObject()

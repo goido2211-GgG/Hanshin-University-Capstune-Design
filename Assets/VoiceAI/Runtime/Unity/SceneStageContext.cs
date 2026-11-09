@@ -16,6 +16,18 @@ namespace AgentEscape.VoiceAI
         [Tooltip("씬에 AgentInteractable이 없으면 시험용 오브젝트를 사용한다.")]
         public bool useDemoObjectsWhenEmpty = true;
 
+        public bool TryResolve(string id, out AgentInteractable target)
+        {
+            target = null;
+            foreach (var item in AgentInteractable.Active)
+            {
+                if (item == null || !item.isActiveAndEnabled || item.gameObject.scene != gameObject.scene || item.id != id) continue;
+                if (target != null) { target = null; return false; }
+                target = item;
+            }
+            return target != null;
+        }
+
         public StageContext Build()
         {
             var context = new StageContext
@@ -30,6 +42,7 @@ namespace AgentEscape.VoiceAI
             var seen = new HashSet<string>();
             foreach (var item in AgentInteractable.Active)
             {
+                if (item == null || !item.isActiveAndEnabled || item.gameObject.scene != gameObject.scene) continue;
                 if (string.IsNullOrEmpty(item.id))
                 {
                     Debug.LogWarning("[VoiceAI] ID가 비어 있는 AgentInteractable: " + item.name, item);

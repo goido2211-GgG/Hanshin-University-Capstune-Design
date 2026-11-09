@@ -1,190 +1,167 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace AgentEscape.VoiceAI
 {
-    /// <summary>
-    /// AI가 보낸 행동을 실제 움직임으로 실행하는 시작용 요원 컨트롤러. 요원 오브젝트에 붙인다.
-    /// 물리와 길 찾기 없이 직선으로 움직이므로, 실제 요원을 만들 때 NavMeshAgent 등으로 교체한다.
-    /// </summary>
+    /// <summary>단일 행동만 수행한다. 작업·대기·종료 이벤트의 소유자는 Runner다.</summary>
     [DisallowMultipleComponent]
     public sealed class AgentBodyController : MonoBehaviour
     {
-        [Tooltip("비워 두면 씬에서 자동으로 찾는다.")]
         public VoiceAgent voiceAgent;
         public float moveSpeed = 3f;
         public float turnSpeed = 540f;
-        [Tooltip("1걸음의 거리")]
         public float stepLength = 1f;
-        [Tooltip("오브젝트 앞에서 멈추는 거리")]
         public float stopDistance = 1.2f;
-        [Tooltip("집은 물건을 머리 위 얼마나 높이 들지")]
         public float carryHeight = 1f;
+        [Min(1f)] public float actionTimeoutSeconds = 30f;
 
-        private SceneStageContext _stage;
+        /// <summary>실제 위치 갱신 직후의 deltaTime. 0은 즉시 정지/기준점 초기화를 뜻한다.</summary>
+        public event System.Action<float> MotionUpdated;
+        public bool IsMoving => _action != null && _moving && isActiveAndEnabled;
+
+        private AgentAction _action;
+        private AgentInteractable _target;
+        private Vector3 _destination;
+        private bool _moving;
+        private float _remainingWait;
+        private float _elapsed;
 
         private void Awake()
         {
-            if (voiceAgent == null) voiceAgent = FindAnyObjectByType<VoiceAgent>();
             if (voiceAgent == null)
             {
-                Debug.LogError("[VoiceAI] 씬에서 VoiceAgent를 찾을 수 없습니다.", this);
-                return;
+                // 기존 단일 로봇 씬 호환. 여러 후보일 때 임의 선택하지 않는다.
+                foreach (var candidate in FindObjectsByType<VoiceAgent>(FindObjectsSortMode.None))
+                {
+                    if (candidate.gameObject.scene != gameObject.scene) continue;
+                    if (voiceAgent != null) { voiceAgent = null; break; }
+                    voiceAgent = candidate;
+                }
             }
-            _stage = voiceAgent.GetComponent<SceneStageContext>();
         }
 
         private void OnEnable()
         {
-            if (voiceAgent != null) voiceAgent.TurnCompleted += HandleTurn;
+            if (voiceAgent != null) voiceAgent.RegisterBody(this);
+            else Debug.LogError("[VoiceAI] Body의 VoiceAgent를 Inspector에서 지정해 주세요.", this);
         }
 
         private void OnDisable()
         {
-            if (voiceAgent != null) voiceAgent.TurnCompleted -= HandleTurn;
+            CancelCurrentAction();
+            if (voiceAgent != null) voiceAgent.UnregisterBody(this);
         }
 
-        // 새 명령이 오면 진행 중인 행동을 멈추고 새 행동을 시작한다.
-        private void HandleTurn(AgentTurnResult turn)
+        public void CancelCurrentAction()
         {
-            if (turn.Actions.Count == 0) return;
-            StopAllCoroutines();
-            StartCoroutine(RunActions(turn.Actions));
+            _action = null;
+            _target = null;
+            _moving = false;
+            AgentEventDispatch.Invoke(MotionUpdated, 0f);
         }
 
-        private IEnumerator RunActions(List<AgentAction> actions)
+        public string BeginAction(AgentAction action, SceneStageContext stage)
         {
-            foreach (AgentAction action in actions)
+            CancelCurrentAction();
+            _action = AgentCommandRules.Copy(action);
+            _elapsed = 0f;
+            _remainingWait = 1f;
+            if (action.Verb == AgentVocabulary.Wait) return null;
+            if (action.Verb == AgentVocabulary.MoveDirection)
             {
-                yield return Execute(action);
+                Vector3 axis = action.Direction == "back" ? -transform.forward :
+                    action.Direction == "left" ? -transform.right :
+                    action.Direction == "right" ? transform.right : transform.forward;
+                _destination = transform.position + axis * (Mathf.Max(0.01f, stepLength) * (action.Steps ?? 1));
+                _moving = true;
+                return MovementError();
             }
+            if (!stage.TryResolve(action.Target, out _target)) return "대상이 없거나 ID가 중복되었습니다: " + action.Target;
+            if (action.Verb == AgentVocabulary.Drop) return null;
+            Vector3 offset = _target.transform.position - transform.position;
+            offset.y = 0f;
+            float distance = Mathf.Max(0.05f, stopDistance);
+            _destination = offset.magnitude > distance
+                ? _target.transform.position - offset.normalized * distance : transform.position;
+            _destination.y = transform.position.y;
+            _moving = (_destination - transform.position).sqrMagnitude > 0.0001f;
+            return _moving ? MovementError() : null;
         }
 
-        private IEnumerator Execute(AgentAction action)
+        private string MovementError() => moveSpeed <= 0f || float.IsNaN(moveSpeed) || float.IsInfinity(moveSpeed)
+            ? "이동 속도는 유한한 양수여야 합니다." : null;
+
+        // Runner가 최신 상태 검증 후 프레임마다 한 번 호출한다. true면 행동 종료.
+        public bool TickAction(float deltaTime, SceneStageContext stage, out string message, out bool success)
         {
-            switch (action.Verb)
+            message = null;
+            success = false;
+            if (_action == null) { message = "실행 중인 행동이 없습니다."; return true; }
+            _elapsed += deltaTime;
+            if (_elapsed > Mathf.Max(1f, actionTimeoutSeconds)) { message = "행동 시간이 초과되었습니다."; return true; }
+            if (_action.Verb == AgentVocabulary.Wait)
+            {
+                _remainingWait -= deltaTime;
+                if (_remainingWait > 0f) return false;
+                success = true; message = "기다리기를 마쳤습니다."; return true;
+            }
+            if (_action.Target != null && (_target == null || !stage.TryResolve(_action.Target, out var current) || current != _target))
+            { message = "행동 중 대상이 변경되었습니다."; return true; }
+            if (_moving)
+            {
+                message = MovementError();
+                if (message != null) return true;
+                Vector3 direction = _destination - transform.position;
+                if (direction.sqrMagnitude > 0.0001f)
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), Mathf.Max(0f, turnSpeed) * deltaTime);
+                transform.position = Vector3.MoveTowards(transform.position, _destination, moveSpeed * deltaTime);
+                AgentEventDispatch.Invoke(MotionUpdated, deltaTime);
+                if ((_destination - transform.position).sqrMagnitude > 0.0001f) return false;
+                _moving = false;
+                // 조작은 다음 프레임에 수행하여 접근 직후 최신 검증을 한 번 더 거친다.
+                return false;
+            }
+            if (_target != null && _action.Verb != AgentVocabulary.Drop)
+            {
+                Vector3 offset = _target.transform.position - transform.position;
+                offset.y = 0f;
+                if (offset.magnitude > Mathf.Max(0.05f, stopDistance) + 0.05f)
+                { message = "대상이 이동하여 조작 거리를 벗어났습니다."; return true; }
+            }
+            switch (_action.Verb)
             {
                 case AgentVocabulary.MoveDirection:
-                    yield return MoveInDirection(action.Direction, action.Steps ?? 1);
+                    stage.agentLocation = "이동한 곳";
+                    message = "방향 이동을 마쳤습니다.";
                     break;
                 case AgentVocabulary.MoveTo:
-                    yield return WalkToTarget(action.Target, true);
+                    stage.agentLocation = _target.displayName + " 앞";
+                    message = stage.agentLocation + "에 도착했습니다.";
                     break;
                 case AgentVocabulary.Inspect:
-                    yield return WalkToTarget(action.Target, false);
-                    AgentInteractable inspected = Find(action.Target);
-                    if (inspected != null) Report(inspected.displayName + "을(를) 살펴봤다: " + inspected.description);
+                    stage.agentLocation = _target.displayName + " 앞";
+                    _target.MarkInspected();
+                    message = _target.displayName + ": " + _target.description;
                     break;
                 case AgentVocabulary.PickUp:
-                    yield return WalkToTarget(action.Target, false);
-                    PickUp(Find(action.Target));
+                    if (_target.transform == transform || transform.IsChildOf(_target.transform))
+                    { message = "로봇 자신이나 부모는 집을 수 없습니다."; return true; }
+                    _target.transform.SetParent(transform, true);
+                    _target.transform.localPosition = Vector3.up * carryHeight;
+                    _target.state = "요원이 들고 있음";
+                    stage.inventory.Add(_target.id);
+                    message = _target.displayName + "을(를) 집었습니다.";
                     break;
                 case AgentVocabulary.Drop:
-                    Drop(Find(action.Target));
+                    _target.transform.SetParent(null, true);
+                    _target.transform.position = transform.position + transform.forward * Mathf.Max(0.05f, stopDistance);
+                    _target.state = "바닥에 있음";
+                    stage.inventory.Remove(_target.id);
+                    message = _target.displayName + "을(를) 내려놓았습니다.";
                     break;
-                case AgentVocabulary.Wait:
-                    yield return new WaitForSeconds(1f);
-                    break;
-                case AgentVocabulary.Stop:
-                    break;
-                default:
-                    // open, press, use 등은 스테이지 기믹에 맞춰 여기에 추가한다.
-                    Debug.Log("[VoiceAI] 아직 구현되지 않은 행동: " + action);
-                    Report(action.Verb + " 행동을 시도했지만 아무 일도 일어나지 않았다.");
-                    break;
+                default: message = "지원하지 않는 행동입니다."; return true;
             }
-        }
-
-        private IEnumerator MoveInDirection(string direction, int steps)
-        {
-            Vector3 axis;
-            switch (direction)
-            {
-                case "back": axis = -transform.forward; break;
-                case "left": axis = -transform.right; break;
-                case "right": axis = transform.right; break;
-                default: axis = transform.forward; break;
-            }
-
-            yield return MoveTo(transform.position + axis * (stepLength * steps), false);
-            SetLocation("이동한 곳");
-            Report("요원이 " + direction + " 방향으로 " + steps + "걸음 이동했다.");
-        }
-
-        private IEnumerator WalkToTarget(string id, bool reportArrival)
-        {
-            AgentInteractable target = Find(id);
-            if (target == null)
-            {
-                Debug.LogWarning("[VoiceAI] 씬에 없는 대상: " + id, this);
-                Report(id + "을(를) 찾지 못했다.");
-                yield break;
-            }
-
-            Vector3 toTarget = target.transform.position - transform.position;
-            toTarget.y = 0f;
-            if (toTarget.magnitude > stopDistance)
-            {
-                yield return MoveTo(target.transform.position - toTarget.normalized * stopDistance, true);
-            }
-
-            SetLocation(target.displayName + " 앞");
-            if (reportArrival) Report("요원이 " + target.displayName + " 앞에 도착했다.");
-        }
-
-        private IEnumerator MoveTo(Vector3 destination, bool faceDirection)
-        {
-            destination.y = transform.position.y;
-            while ((destination - transform.position).sqrMagnitude > 0.0001f)
-            {
-                if (faceDirection)
-                {
-                    Quaternion look = Quaternion.LookRotation(destination - transform.position);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, look, turnSpeed * Time.deltaTime);
-                }
-                transform.position = Vector3.MoveTowards(transform.position, destination, moveSpeed * Time.deltaTime);
-                yield return null;
-            }
-        }
-
-        private void PickUp(AgentInteractable target)
-        {
-            if (target == null || _stage.inventory.Contains(target.id)) return;
-            target.transform.SetParent(transform, true);
-            target.transform.localPosition = Vector3.up * carryHeight;
-            target.state = "요원이 들고 있음";
-            _stage.inventory.Add(target.id);
-            Report("요원이 " + target.displayName + "을(를) 집었다.");
-        }
-
-        private void Drop(AgentInteractable target)
-        {
-            if (target == null || !_stage.inventory.Contains(target.id)) return;
-            target.transform.SetParent(null, true);
-            target.transform.position = transform.position + transform.forward * stopDistance;
-            target.state = "바닥에 있음";
-            _stage.inventory.Remove(target.id);
-            Report("요원이 " + target.displayName + "을(를) 내려놓았다.");
-        }
-
-        private static AgentInteractable Find(string id)
-        {
-            foreach (AgentInteractable item in AgentInteractable.Active)
-            {
-                if (item.id == id) return item;
-            }
-            return null;
-        }
-
-        private void SetLocation(string location)
-        {
-            if (_stage != null) _stage.agentLocation = location;
-        }
-
-        private void Report(string description)
-        {
-            voiceAgent.ReportEvent(description);
+            success = true;
+            return true;
         }
     }
 }
