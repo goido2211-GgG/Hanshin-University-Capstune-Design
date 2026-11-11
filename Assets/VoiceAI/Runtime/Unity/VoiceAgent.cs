@@ -13,6 +13,11 @@ namespace AgentEscape.VoiceAI
     {
         private const float MinRecordingSeconds = 0.3f;
         private const float SilenceRms = 0.002f;
+        [Header("API 연결")]
+        [Tooltip("기존 씬은 시작 시 연결합니다. 통합 시험 씬은 끄고 첫 음성/일반 채팅 요청 때 연결합니다.")]
+        public bool initializeApiOnAwake = true;
+        public bool ApiReady => _brain != null;
+
         [Header("모델")]
         public string llmModel = "gpt-6-luna";
         public string reasoningEffort = "low";
@@ -64,12 +69,33 @@ namespace AgentEscape.VoiceAI
             EnsureRunner();
             _lifetime = new CancellationTokenSource();
             _recorder = new MicrophoneRecorder(maxRecordingSeconds);
+            if (initializeApiOnAwake) EnsureApiReady();
+        }
+
+        private bool EnsureApiReady()
+        {
+            if (_brain != null) return true;
             var prompt = Resources.Load<TextAsset>(systemPromptResource);
-            if (prompt == null) { StartupError = "시스템 프롬프트를 찾을 수 없습니다: " + systemPromptResource; Fail(StartupError); return; }
-            try { _client = new OpenAIClient(OpenAIKeyProvider.Load()); }
-            catch (Exception error) { StartupError = "API 키 초기화 실패: " + error.Message; Fail(StartupError); return; }
-            _brain = new AgentBrain(prompt.text, new LlmSettings
-            { Model = llmModel, ReasoningEffort = reasoningEffort, MaxOutputTokens = maxOutputTokens }, _client.CreateResponseAsync);
+            if (prompt == null)
+            {
+                StartupError = "시스템 프롬프트를 찾을 수 없습니다: " + systemPromptResource;
+                Fail(StartupError);
+                return false;
+            }
+            try
+            {
+                _client = new OpenAIClient(OpenAIKeyProvider.Load());
+                _brain = new AgentBrain(prompt.text, new LlmSettings
+                { Model = llmModel, ReasoningEffort = reasoningEffort, MaxOutputTokens = maxOutputTokens }, _client.CreateResponseAsync);
+                StartupError = "";
+                return true;
+            }
+            catch (Exception error)
+            {
+                StartupError = "API 연결 초기화 실패: " + error.Message;
+                Fail(StartupError);
+                return false;
+            }
         }
 
         private void CancelRequest()
@@ -113,7 +139,7 @@ namespace AgentEscape.VoiceAI
 
         public void StartVoiceInput()
         {
-            if (!isActiveAndEnabled || _brain == null || State == VoiceAgentState.Recording) return;
+            if (!isActiveAndEnabled || State == VoiceAgentState.Recording || !EnsureApiReady()) return;
             var id = BeginInput();
             try { _recorder.Start(); SetState(VoiceAgentState.Recording); }
             catch (Exception error) { HandleFailure(id, "", error); }
@@ -133,7 +159,7 @@ namespace AgentEscape.VoiceAI
         {
             if (AgentCommandRules.IsStop(text)) { RequestStop(); return true; }
             if (AgentCommandRules.IsResumeExploration(text)) { ResumeExploration(); return true; }
-            if (!isActiveAndEnabled || _brain == null || string.IsNullOrWhiteSpace(text)) return false;
+            if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(text) || !EnsureApiReady()) return false;
             var id = BeginInput();
             _ = RunTurnAsync(id, text, _request.Token);
             return true;

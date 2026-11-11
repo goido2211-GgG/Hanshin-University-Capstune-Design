@@ -1,5 +1,36 @@
 # VoiceAI 변경 이력
 
+## 2026-11-11 — 중단된 통합 검증 재개 및 종료
+
+- 기존 통합 구현은 재작성하지 않았다. 사용자 직접 성공 보고(새 씬, 사람 이동, 드론 전환·비행, 자율 탐색, SF 맵 렌더링)를 TEST_PLAN에 별도 출처로 기록했다.
+- 실제 Unity 6000.3.25f1 Play Mode에서 가상 입력·가짜 Brain 응답으로 미완료 검증 27개 assertion 통과. 채팅 중 조작·Tab 차단, 단일 카메라/AudioListener, 상자 3개 조회·조사, 집기/내려놓기, 탐색 정지/재개·선점, 대기/이동 취소, 늦은 응답 폐기를 확인했다. Play 오류·경고 각각 0, 실제 API·마이크 사용 없음.
+- C# 컴파일 성공. Editor 시작의 Cinemachine asmref/partial-class 진단은 별도 잔여 사항이며 수정하지 않았다. 첫 실행 인자 오류는 검증 도구 실행을 수정하여 해결했으며 게임 기능 코드는 수정하지 않았다.
+- TEST_PLAN/CHANGELOG만 영구 갱신. 이번 임시 Editor 검증 스크립트/meta는 정리하고 원문·결과·로그는 Library/VoiceAIIntegrationAudit-20261111에 보존했다. 전날 Builder 및 기존 파일은 삭제하지 않았다.
+- 검증 전 외부 백업 12개 SHA-256 일치. 검증 직후 원본 12개도 일치. Git 병합 인덱스·HEAD·MERGE_HEAD 유지 확인, 기존 VoiceAI 원본 프로젝트 수정 없음. add/commit/push/reset/clean/restore 없음.
+- 남은 검증은 실제 입력·한글 IME·커서, 별도 승인하의 실제 API/STT, 추후 Kyle 연결이다. 기존 회귀 51개는 다시 실행하지 않았다. 퍼즐 등 새 기능은 구현하지 않았다.
+
+## 2026-11-11 — 독립된 사람·드론·AI 통합 프로토타입
+
+### 실제 구현
+
+- 새 VoiceAI_Integration_Test 씬: 기존 SF 맵 복제, HumanPlayer / Drone / AIRobot 분리, 카메라 2개, 실제 상자 3개와 동일 씬 VoiceAISystem 연결.
+- 기존 PlayerController / DroneController / AgentBrain / AgentActionRunner / AgentBodyController / Exploration / AnimatorBridge를 재사용했다.
+- ControlModeSwitcher: 입력 차단, 외부 키 처리 옵션, 선택적 드론 진입 정책, 현재 카메라·모드 공개. 기존 serialized 참조와 기본 동작을 유지했다.
+- VoiceAgentDebugUI 및 새 VoiceAIIntegrationInput: Enter 채팅, V 녹음, Tab 전환, Esc AI 취소, F 시험 정보 조회, 채팅 중 수동 조작·전환 차단, IME 조합 guard.
+- VoiceAgent: 기존 기본 초기화 동작을 유지하는 initializeApiOnAwake 옵션과 첫 실제 요청 지연 초기화. 새 씬 자율 탐색·로컬 중지는 키 없이 동작한다.
+- 신규 URP 재질 4개: 임시 로봇과 빨강·파랑·노랑 시험 상자. 실제 Kyle 원본은 복사하지 않았다.
+- 개발 문서와 통합 시험 가이드를 갱신했다.
+
+### 검증과 보존
+
+실제 Unity 6000.3.25f1 씬 생성 및 C# 컴파일을 통과했다(오류 0 / 경고 0). 자동 Play 결과는 TEST_PLAN에 별도로 기록한다. 실제 네트워크·음성·IME·렌더링·Kyle 검증과 구분한다.
+
+변경 전 코드·문서·기존 씬·검증 도구 18개를 Library/VoiceAIIntegrationBuild-20261111/Backup에 SHA-256 검증 백업했다. 기존 Git 병합 인덱스와 원본 프로젝트는 변경하지 않는다. 새 씬만 저장하며 기존 Test_Scene / kkws_Scene / ssm 씬, 패키지, 기존 재질은 이 단계에서 수정하지 않는다. 자동 commit/push/add/reset/clean은 하지 않는다.
+
+### 후속
+
+실제 사용자 회귀와 Kyle 연결을 확인한 뒤 동일 행동 검증을 사용하는 버튼→서랍→열쇠→문 퍼즐, 좌석 진입 정책, 장애물 경로 탐색을 진행한다.
+
 날짜 기준: Asia/Seoul. 문서 작성과 실제 코드 변경을 별도로 기록한다. 계획·예상 결과·미실행 시험을 구현 완료 이력으로 기록하지 않는다.
 
 ## 2026-11-10 — Kyle Animation Event 무음 수신기 추가

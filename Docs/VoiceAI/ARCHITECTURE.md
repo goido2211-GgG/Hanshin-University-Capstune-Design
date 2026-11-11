@@ -1,5 +1,20 @@
 # VoiceAI 아키텍처
 
+## 2026-11-11 — 독립된 사람·드론·AI 통합 시험
+
+현재 통합 씬은 Assets/Scenes/VoiceAI_Integration_Test.unity다. SF 맵을 복제하여 HumanPlayer, Drone, AIRobot, VoiceAISystem과 시험 상자를 같은 씬에 저장했다. 기존 세 시험 씬은 수정하지 않았다.
+
+- HumanPlayer / Drone은 기존 PlayerController / DroneController를 그대로 사용한다.
+- ControlModeSwitcher는 카메라·AudioListener·커서·수동 입력 차단을 소유한다. 기존 serialized 참조와 externalInput=false 기본값을 유지한다. 선택적 IDroneAccessPolicy는 향후 앉은 상태 드론 진입 제한을 위한 연결점이다.
+- VoiceAIIntegrationInput은 -200 실행 순서로 Enter/V/Tab/Esc/F를 조정한다. 외부 입력 모드에서 DebugUI의 키 처리를 끄며, 채팅이 열리면 수동 컨트롤러와 Tab만 차단한다. 게임 시간과 로봇 실행은 멈추지 않는다.
+- AIRobot에는 Body / Exploration / AnimatorBridge를 연결한다. 사람·드론 컨트롤러는 부착하지 않는다. 현재 VisualRoot 아래 캡슐은 임시 외형이며 Animator 참조가 비어 있어도 예외가 나지 않는다.
+- VoiceAgent / AgentBrain / Runner / Body의 해석·최신 작업 ID·1초 대기·재검증·취소 책임은 유지한다. 새 씬은 initializeApiOnAwake=false로 첫 실제 요청까지 API를 초기화하지 않는다. 기존 씬 기본값은 true다.
+- SceneStageContext.useDemoObjectsWhenEmpty=false다. 실제 red_box/blue_box/yellow_box만 상호작용 대상으로 등록한다. F는 정보를 표시하고 InteractionRequested 이벤트를 보낼 뿐 퍼즐 상태나 조사 완료 플래그를 바꾸지 않는다.
+- 채팅 중 컨트롤러 비활성화로 사람 중력도 잠시 멈춘다. 이후 입력 축만 차단하는 방식이 필요하면 별도로 개선한다.
+- API 초기화 전 자율 탐색의 실행 결과는 월드 상태에 반영되지만 Brain 대화 이벤트에는 누적되지 않는다.
+
+실제 연결과 Inspector 절차는 [INTEGRATION_TEST_GUIDE.md](INTEGRATION_TEST_GUIDE.md), 검증 결과는 TEST_PLAN을 따른다. 아래의 이전 날짜 설명은 해당 단계의 이력이다.
+
 기준일: 2026-11-09 (Asia/Seoul). Unity 프로젝트 기록: 6000.3.25f1.
 
 최신 코드 갱신: 2026-11-10 — 반자율 탐색 v0.1 추가. 새 탐색의 실제 Play Mode는 미실행이다. Kyle 걷기·이동 완료 후 Idle은 사용자 직접 성공 보고(U07/U08)이며, 애니메이션 연결 후 Esc 회귀는 미확인이다.

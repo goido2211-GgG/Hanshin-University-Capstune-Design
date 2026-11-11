@@ -1,5 +1,11 @@
 # 1차 리팩터링 검증 도구
 
+## 2026-11-11 통합 입력 참조 빌드
+
+새 VoiceAIIntegrationInput이 팀원 ControlModeSwitcher / PlayerController / DroneController를 참조하므로 UnityCompile에 이 소스 3개와 실제 Library/ScriptAssemblies/Unity.InputSystem.dll 참조를 추가했다. Unity에서 프로젝트 Import·컴파일을 먼저 수행해야 한다. 런타임 참조 빌드가 실제 씬·입력·IME 시험을 대신하지 않는다.
+
+BehaviorTests의 기존 선택적 컴파일 범위는 유지한다. 실제 Starter Assets Controller 파일을 읽는 에셋 계약 사례는 Kyle이 없는 통합 worktree에서 실행할 수 없다. 이번 새 통합 씬의 native Play 검증은 키·마이크 없이 Library/VoiceAIIntegrationBuild-20261111/PlayResult.json에 별도로 기록하며, 실제 API/STT 성공으로 간주하지 않는다.
+
 기준일: 2026-11-10. 새 패키지를 설치하지 않고 로컬 .NET 10 SDK, 기존 Unity 6000.3.25f1 DLL, 프로젝트 Library의 Newtonsoft.Json DLL을 사용한다. bin/obj/.cli는 이 폴더의 .gitignore로 제외한다. 루트 .gitignore와 Packages는 변경하지 않는다.
 
 ## 실행
