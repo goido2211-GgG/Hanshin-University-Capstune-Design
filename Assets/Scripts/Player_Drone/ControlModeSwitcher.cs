@@ -39,7 +39,8 @@ public class ControlModeSwitcher : MonoBehaviour
 
     private void Update()
     {
-        if (externalInput || InputSuppressed) return;
+        if (PauseMenu.IsPaused) return;               // 일시정지 중에는 Tab 전환 막기 (내 작업)
+        if (externalInput || InputSuppressed) return; // 외부 입력 사용 중이거나 채팅 입력 중이면 막기 (팀원 작업)
         var keyboard = Keyboard.current;
         if (keyboard != null && keyboard.tabKey.wasPressedThisFrame) TryToggleMode();
     }
