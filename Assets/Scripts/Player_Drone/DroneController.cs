@@ -42,6 +42,8 @@ public class DroneController : MonoBehaviour
 
     private void Update()
     {
+        if (PauseMenu.IsPaused) return;   // 일시정지 중에는 입력 무시
+        
         Keyboard keyboard = Keyboard.current;
         Mouse mouse = Mouse.current;
         if (keyboard == null || mouse == null) return;
