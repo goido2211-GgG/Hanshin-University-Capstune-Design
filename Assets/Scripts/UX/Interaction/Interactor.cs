@@ -25,7 +25,7 @@ public enum InteractorRole
 /// 언제 동작하나?
 /// - 이 오브젝트의 카메라가 켜져 있을 때만 동작한다.
 ///   (ControlModeSwitcher가 Tab으로 카메라를 바꾸므로, 지금 조작 중인 쪽만 동작하게 된다)
-/// - 일시정지 중에는 동작하지 않는다.
+/// - 일시정지 중, 채팅 입력 중에는 동작하지 않는다.
 /// </summary>
 public class Interactor : MonoBehaviour
 {
@@ -50,11 +50,14 @@ public class Interactor : MonoBehaviour
     [Tooltip("화면에 '[F] ○○'를 띄울 TextMeshPro 텍스트. 플레이어와 드론이 같은 것을 함께 쓴다.")]
     [SerializeField] private TMP_Text promptLabel;
 
-    // ★ 추가: 문구 뒤에 깔리는 반투명 배경 상자
     [Tooltip("(선택) 문구 뒤의 배경 상자. 넣으면 글자 대신 이 상자를 켜고 끈다. 글자는 이 상자의 자식이어야 한다.")]
     [SerializeField] private GameObject promptBox;
 
-    // ★ 추가: 실제로 켜고 끌 대상
+    [Header("다른 시스템 (선택)")]
+    [Tooltip("Hierarchy의 ModeSwitcher 오브젝트. 채팅 입력 중인지 확인하는 데 쓴다. 비워 두면 채팅 확인을 건너뛴다.")]
+    [SerializeField] private ControlModeSwitcher modeSwitcher;
+
+    // 실제로 켜고 끌 대상.
     // 배경 상자를 넣었으면 상자를, 안 넣었으면 글자 오브젝트를 돌려준다.
     // "조건 ? A : B" 는 조건이 참이면 A, 거짓이면 B를 돌려주는 짧은 if 문(삼항 연산자)이다.
     // 상자를 끄면 자식인 글자도 같이 꺼지므로, 상자가 있으면 상자만 켜고 끄면 된다.
@@ -74,7 +77,6 @@ public class Interactor : MonoBehaviour
     private void Start()
     {
         // 시작할 때는 안내 문구(와 배경 상자)를 숨겨 둔다.
-        // ★ 변경: promptLabel.gameObject → PromptObject
         if (promptLabel != null) PromptObject.SetActive(false);
     }
 
@@ -106,9 +108,10 @@ public class Interactor : MonoBehaviour
     /// </summary>
     private bool IsActive()
     {
-        if (PauseMenu.IsPaused) return false;     // 일시정지 중이면 X
-        if (viewCamera == null) return false;     // 카메라 칸이 비어 있으면 X
-        return viewCamera.enabled;                // 내 카메라가 켜져 있을 때만 O
+        if (PauseMenu.IsPaused) return false;                                     // 일시정지 중이면 X
+        if (modeSwitcher != null && modeSwitcher.InputSuppressed) return false;   // 채팅 입력 중이면 X
+        if (viewCamera == null) return false;                                     // 카메라 칸이 비어 있으면 X
+        return viewCamera.enabled;                                                // 내 카메라가 켜져 있을 때만 O
     }
 
     /// <summary>
@@ -193,7 +196,7 @@ public class Interactor : MonoBehaviour
         if (promptLabel == null) return;
         promptOwner = this;                         // 이제 내가 문구의 주인
         promptLabel.text = text;
-        PromptObject.SetActive(true);               // ★ 변경: 상자(또는 글자)를 켠다
+        PromptObject.SetActive(true);               // 상자(또는 글자)를 켠다
     }
 
     private void HidePrompt()
@@ -201,7 +204,7 @@ public class Interactor : MonoBehaviour
         if (promptLabel == null) return;
         if (promptOwner != this) return;            // 내가 띄운 문구가 아니면 건드리지 않음
         promptOwner = null;
-        PromptObject.SetActive(false);              // ★ 변경: 상자(또는 글자)를 끈다
+        PromptObject.SetActive(false);              // 상자(또는 글자)를 끈다
     }
 
     private void OnDisable()

@@ -43,7 +43,7 @@ public class PlayerController : MonoBehaviour
 
     private void Look(Mouse mouse)
     {
-        Vector2 delta = mouse.delta.ReadValue() * lookSensitivity;
+        Vector2 delta = mouse.delta.ReadValue() * lookSensitivity * GameSettings.Sensitivity;   // 설정의 감도 배율 적용
 
         // 몸통은 좌우, 카메라는 상하
         transform.Rotate(0f, delta.x, 0f);
