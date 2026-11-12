@@ -1,0 +1,6 @@
+bin/
+obj/
+.cli/
+# 프로젝트 루트의 Unity 자동 생성 csproj 제외 규칙에서 이 수동 검증 프로젝트만 예외 처리.
+!UnityCompile.csproj
+!BehaviorTests.csproj
