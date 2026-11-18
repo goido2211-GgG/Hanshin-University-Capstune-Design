@@ -442,10 +442,13 @@ internal static class BehaviorTests
             Check(!f.Runner.HasActiveCommand, "inactive selected");
             f.Box.enabled = true; f.Box.transform.position = new Vector3(0, 0, 20); e.Tick(1);
             Check(!f.Runner.HasActiveCommand, "range violated");
-            f.Box.transform.position = new Vector3(0, 0, 2); f.Stage.inventory.Add(f.Box.id); e.Tick(1);
+            f.Box.transform.position = new Vector3(0, 0, 2);
+            f.Submit(new AgentAction { Verb = AgentVocabulary.PickUp, Target = f.Box.id }); f.Tick(5, 100); e.Tick(3);
+            Check(f.Body.CurrentHeldObject == f.Box, "fixture failed to pick up target");
             Check(!f.Runner.HasActiveCommand, "held selected");
-            f.Stage.inventory.Clear(); var duplicate = new GameObject().AddComponent<AgentInteractable>(); duplicate.id = f.Box.id;
-            e.Tick(1); Check(!f.Runner.HasActiveCommand, "duplicate selected");
+            f.Submit(new AgentAction { Verb = AgentVocabulary.Drop, Target = f.Box.id }); f.Tick(5, 100);
+            var duplicate = new GameObject().AddComponent<AgentInteractable>(); duplicate.id = f.Box.id;
+            e.Tick(3); Check(!f.Runner.HasActiveCommand, "duplicate selected");
         }));
         await Test("no physical candidates never uses fake stage objects", () => Sync(() =>
         {
@@ -1021,6 +1024,172 @@ internal static class BehaviorTests
             f.Tick(8, 160);
             Check(!f.Voice.IsAwaitingTarget && f.Stage.inventory.SequenceEqual(new[] { "red_box" }),
                 "voice follow-up discarded the chat pickup intent");
+        }));
+        await Test("repeated pickup reuses the same instance and does not apply carry twice", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            int instances = AgentInteractable.Active.Count;
+            var physics = f.Box.gameObject.AddComponent<Rigidbody>();
+            var collider = f.Box.gameObject.AddComponent<Collider>();
+            f.Voice.SendChat("빨간 상자 집어");
+            f.Voice.SendChat("빨간 상자 집어");
+            f.Tick(8, 160);
+            var heldPosition = f.Box.transform.position;
+            Check(ReferenceEquals(f.Body.CurrentHeldObject, f.Box) && f.Box.transform.parent == f.Body.transform &&
+                physics.isKinematic && !collider.enabled && f.Stage.inventory.SequenceEqual(new[] { f.Box.id }),
+                "pickup did not attach and own the original object");
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(5, 100);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected &&
+                f.Actions.Count(action => action.Outcome == AgentExecutionOutcome.Completed) == 1 &&
+                AgentInteractable.Active.Count == instances && Vector3.Distance(f.Box.transform.position, heldPosition) < 0.001f,
+                "repeated pickup cloned, moved or reattached the box");
+        }));
+        await Test("occupied slot rejects another pickup and a mismatched explicit drop", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var blue = new GameObject().AddComponent<AgentInteractable>();
+            blue.id = "blue_box"; blue.displayName = "파란 상자";
+            blue.allowedVerbs.AddRange(new[] { AgentVocabulary.PickUp, AgentVocabulary.Drop });
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(8, 160);
+            f.Voice.SendChat("파란 상자 집어"); f.Tick(5, 100);
+            Check(f.Endings.Last().Message.Contains("내려놓") && blue.transform.parent == null &&
+                f.Body.CurrentHeldObject == f.Box, "second pickup overwrote the occupied slot");
+            f.Voice.SendChat("파란 상자 내려놔"); f.Tick(5, 100);
+            Check(f.Endings.Last().Message.Contains("들고 있지") && f.Body.CurrentHeldObject == f.Box &&
+                f.Box.transform.parent == f.Body.transform, "explicit mismatch dropped the wrong object");
+        }));
+        await Test("all held-object drop forms release the same box and restore physics", () => Sync(() =>
+        {
+            foreach (string text in new[] { "상자 내려놔", "들고 있는 상자 내려놔", "그거 내려놔",
+                "내려놔", "손에 든 거 내려놔", "빨간 상자 내려놔" })
+            {
+                var f = new Fixture(apiAvailable: false);
+                var physics = f.Box.gameObject.AddComponent<Rigidbody>();
+                var collider = f.Box.gameObject.AddComponent<Collider>();
+                var child = new GameObject();
+                child.transform.SetParent(f.Box.transform, false);
+                var disabledCollider = child.AddComponent<Collider>();
+                disabledCollider.enabled = false;
+                f.Voice.SendChat("빨간 상자 집어"); f.Tick(8, 160);
+                f.Voice.SendChat(text); f.Tick(5, 100);
+                Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Completed && f.Body.CurrentHeldObject == null &&
+                    f.Stage.inventory.Count == 0 && f.Box.transform.parent == null &&
+                    !physics.isKinematic && collider.enabled && !disabledCollider.enabled,
+                    "held slot or physics was not restored: " + text);
+            }
+        }));
+        await Test("carry move uses physical possession and repick uses the last actual drop", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.SendChat("내려놔");
+            Check(f.Endings.Last().Message.Contains("현재 들고 있는 물체가 없습니다"), "empty drop did not explain");
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(8, 160);
+            float start = f.Body.transform.position.z;
+            f.Voice.SendChat("그거 들고 앞으로 두 칸 가"); f.Tick(6, 120);
+            Check(Math.Abs(f.Body.transform.position.z - start - 2f) < 0.001f &&
+                f.Body.CurrentHeldObject == f.Box, "carry move re-picked or failed to move");
+            f.Voice.SendChat("이제 내려놔"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == null && f.Body.LastDroppedObject == f.Box, "successful drop was not remembered");
+            var decoy = new GameObject().AddComponent<AgentInteractable>(); decoy.id = "decoy";
+            f.Runner.SelectTarget(decoy);
+            f.Voice.SendChat("다시 집어"); f.Tick(8, 160);
+            Check(f.Body.CurrentHeldObject == f.Box && decoy.transform.parent == null,
+                "repick used conversation selection instead of actual recent drop");
+        }));
+        await Test("cancel and failed pickup or drop preserve the physical state", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(1.4f, 28); f.Voice.RequestStop(); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == null && f.Box.transform.parent == null, "cancelled pickup attached");
+            f.Body.moveSpeed = 0;
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == null && f.Endings.Last().Outcome == AgentExecutionOutcome.Failed, "failed pickup occupied slot");
+            f.Body.moveSpeed = 3;
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(8, 160);
+            f.Voice.SendChat("내려놔"); f.Tick(0.5f, 10); f.Voice.RequestStop(); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == f.Box && f.Box.transform.parent == f.Body.transform, "cancelled drop released");
+            f.Box.allowedVerbs.Remove(AgentVocabulary.Drop);
+            f.Voice.SendChat("내려놔"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == f.Box && f.Stage.inventory.SequenceEqual(new[] { f.Box.id }) &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "failed drop lost the held object");
+        }));
+        await Test("disabled carried target is detached and removed from the projected inventory", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var physics = f.Box.gameObject.AddComponent<Rigidbody>();
+            var collider = f.Box.gameObject.AddComponent<Collider>();
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(8, 160);
+            Check(f.Body.CurrentHeldObject == f.Box, "fixture failed to carry");
+            f.Voice.SendChat("그거 들고 앞으로 두 칸 가"); f.Tick(1.4f, 28);
+            f.Box.enabled = false;
+            Vector3 stoppedAt = f.Body.transform.position;
+            f.Tick(5, 100);
+            Check(f.Stage.BuildForCommand().Inventory.Count == 0 && f.Body.CurrentHeldObject == null &&
+                f.Box.transform.parent == null && collider.enabled && !physics.isKinematic &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected &&
+                Vector3.Distance(f.Body.transform.position, stoppedAt) < 0.001f,
+                "disabled target left a ghost inventory or altered physics");
+        }));
+        await Test("API drop uses the held ID rather than selected target", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.SendChat("빨간 상자 집어"); f.Tick(8, 160);
+            var decoy = new GameObject().AddComponent<AgentInteractable>();
+            decoy.id = "blue_box"; decoy.displayName = "파란 상자"; decoy.allowedVerbs.Add(AgentVocabulary.Drop);
+            f.Runner.SelectTarget(decoy);
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            string state = null;
+            OpenAIClient.Response = (request, token) =>
+            {
+                state = (string)request["input"][0]["content"];
+                return Task.FromResult(Reply(0, new AgentAction { Verb = AgentVocabulary.Drop }));
+            };
+            f.Voice.SendChat("손에 쥔 물건을 바닥에 두세요"); f.Tick(6, 120);
+            Check(state != null && state.Contains("현재 들고 있는 물체 ID: red_box") &&
+                state.Contains("직전에 선택한 대상 ID: blue_box") && f.Body.CurrentHeldObject == null &&
+                f.Body.LastDroppedObject == f.Box && f.Endings.Last().Outcome == AgentExecutionOutcome.Completed,
+                "API and physical ownership diverged");
+        }));
+        await Test("reverse-order duplicate API carry requests mutate ownership only once", async () =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            var old = new TaskCompletionSource<JObject>();
+            int calls = 0;
+            var pickup = new AgentAction { Verb = AgentVocabulary.PickUp, Target = "red_box" };
+            OpenAIClient.Response = (request, token) => ++calls == 1 ? old.Task : Task.FromResult(Reply(0, pickup));
+            f.Voice.SendChat("빨간 상자 집어");
+            f.Voice.SendChat("빨간 상자 집어");
+            f.Tick(8, 160);
+            old.SetResult(Reply(0, pickup));
+            await Task.Yield();
+            f.Tick(5, 100);
+            Check(calls == 2 && f.Body.CurrentHeldObject == f.Box &&
+                f.Actions.Count(action => action.Outcome == AgentExecutionOutcome.Completed) == 1 &&
+                f.Stage.inventory.Count == 1, "stale transport reapplied pickup");
+        });
+        await Test("held category mismatch and disabled robot preserve physical ownership invariants", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Box.id = "keycard"; f.Box.displayName = "카드키";
+            var collider = f.Box.gameObject.AddComponent<Collider>();
+            f.Voice.SendChat("카드키 집어"); f.Tick(8, 160);
+            Check(f.Body.CurrentHeldObject == f.Box, "fixture failed to carry a non-box");
+            f.Voice.SendChat("상자 내려놔"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == f.Box && !collider.enabled, "box command dropped the held keycard");
+            f.Body.enabled = false;
+            Check(f.Body.CurrentHeldObject == null && f.Stage.inventory.Count == 0 &&
+                f.Box.transform.parent == null && collider.enabled, "disabled robot retained a kinematic attachment");
+        }));
+        await Test("API sequence fills a bare drop from its preceding pickup", () => Sync(() =>
+        {
+            var f = new Fixture();
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.PickUp, Target = "red_box" },
+                new AgentAction { Verb = AgentVocabulary.Drop }));
+            f.Voice.SendChat("빨간 상자를 집고 나서 내려놓아"); f.Tick(10, 200);
+            Check(f.Actions.Count == 2 && f.Body.CurrentHeldObject == null && f.Body.LastDroppedObject == f.Box &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Completed, "API lost carry state between steps");
         }));
         Console.WriteLine($"TOTAL: {_passed} passed, {_failed} failed, {_skipped} skipped. Unity Play Mode NOT executed.");
         return _failed == 0 ? 0 : 1;

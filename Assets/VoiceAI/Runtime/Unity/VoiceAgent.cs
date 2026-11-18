@@ -23,6 +23,7 @@ namespace AgentEscape.VoiceAI
         public AgentCommandRouting commandRouting = AgentCommandRouting.PreferLocal;
         public bool ApiReady => _brain != null;
         public bool IsAwaitingTarget => _pendingCommand != null;
+        public AgentInteractable CurrentHeldObject => _runner == null ? null : _runner.CurrentHeldObject;
         public AgentApiMetrics LastApiMetrics => _brain?.LastApiMetrics;
         public long? LastTranscriptionMilliseconds { get; private set; }
 
@@ -223,6 +224,7 @@ namespace AgentEscape.VoiceAI
                 Say(message);
                 return Task.CompletedTask;
             }
+            if (TrySubmitCarryCommand(id, text)) return Task.CompletedTask;
             var pending = _pendingCommand;
             if (pending != null)
             {
@@ -308,6 +310,46 @@ namespace AgentEscape.VoiceAI
             }
 
             SubmitTarget(id, verbs, target, _stage.BuildForCommand());
+            return true;
+        }
+
+        private bool TrySubmitCarryCommand(AgentCommandId id, string text)
+        {
+            if (SceneCommandTargeting.TryParseDropCommand(text, out string selector))
+            {
+                _pendingCommand = null;
+                var held = CurrentHeldObject;
+                if (held == null)
+                {
+                    RejectTarget(id, "현재 들고 있는 물체가 없습니다.");
+                    return true;
+                }
+
+                var context = _stage.BuildForCommand();
+                if (!string.IsNullOrEmpty(selector) &&
+                    !SceneCommandTargeting.ResolveSelection(selector, context).Any(item => item.Id == held.id))
+                {
+                    RejectTarget(id, $"현재 들고 있는 물체는 {held.displayName}입니다. 요청한 물체는 들고 있지 않습니다.");
+                    return true;
+                }
+                SubmitTarget(id, new[] { AgentVocabulary.Drop }, held, context);
+                return true;
+            }
+            if (SceneCommandTargeting.IsRepickCommand(text))
+            {
+                _pendingCommand = null;
+                var last = _runner.LastDroppedObject;
+                if (last == null || !_stage.TryResolve(last.id, out var actual) || actual != last)
+                    RejectTarget(id, "다시 집을 수 있는 최근에 내려놓은 물체를 찾지 못했습니다.");
+                else
+                    SubmitTarget(id, new[] { AgentVocabulary.PickUp }, last, _stage.BuildForCommand());
+                return true;
+            }
+            if (!SceneCommandTargeting.TryParseCarryMove(text, out var actions)) return false;
+            _pendingCommand = null;
+            var carried = CurrentHeldObject;
+            if (carried == null) RejectTarget(id, "현재 들고 있는 물체가 없습니다.");
+            else _runner.Submit(id, actions, null, requiredHeldObject: carried);
             return true;
         }
 

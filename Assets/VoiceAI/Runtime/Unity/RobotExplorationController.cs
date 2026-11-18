@@ -120,7 +120,7 @@ namespace AgentEscape.VoiceAI
             {
                 if (item == null || !item.isActiveAndEnabled || !item.allowAutonomousExploration || item.HasBeenInspected ||
                     string.IsNullOrWhiteSpace(item.id) || item.gameObject.scene != _stage.gameObject.scene ||
-                    _failedIds.Contains(item.id) || _stage.inventory.Contains(item.id) ||
+                    _failedIds.Contains(item.id) || item == body.CurrentHeldObject ||
                     item.transform == body.transform || item.transform.IsChildOf(body.transform) || body.transform.IsChildOf(item.transform)) continue;
                 if (!_stage.TryResolve(item.id, out var unique) || unique != item) continue;
                 float distance = (item.transform.position - body.transform.position).sqrMagnitude;

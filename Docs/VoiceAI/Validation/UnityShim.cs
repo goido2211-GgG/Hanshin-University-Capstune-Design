@@ -31,6 +31,17 @@ namespace UnityEngine
         public GameObject gameObject;
         public Transform transform => gameObject.transform;
         public T GetComponent<T>() where T : Component => gameObject.GetComponent<T>();
+        public T GetComponentInParent<T>() where T : Component
+        {
+            for (var current = transform; current != null; current = current.parent)
+            {
+                var match = Components.OfType<T>().FirstOrDefault(item => item.transform == current);
+                if (match != null) return match;
+            }
+            return null;
+        }
+        public T[] GetComponentsInChildren<T>(bool includeInactive) where T : Component =>
+            Components.OfType<T>().Where(item => item.transform == transform || item.transform.IsChildOf(transform)).ToArray();
         public bool TryGetComponent<T>(out T component) where T : Component => gameObject.TryGetComponent(out component);
         public bool CompareTag(string tag) => gameObject.tag == tag;
     }
@@ -50,6 +61,7 @@ namespace UnityEngine
         private readonly List<Component> _components = new List<Component>();
         public int scene = 1;
         public int layer;
+        public bool activeInHierarchy => true;
         public string tag = "Untagged";
         public static GameObject[] FindGameObjectsWithTag(string tag) =>
             Components.Select(c => c.gameObject).Distinct().Where(g => g.tag == tag).ToArray();
@@ -70,14 +82,23 @@ namespace UnityEngine
     }
     public class Transform
     {
-        public Vector3 position;
+        public Transform parent { get; private set; }
+        public Vector3 localPosition { get; set; }
+        public Vector3 position
+        {
+            get => (parent?.position ?? default) + localPosition;
+            set => localPosition = value - (parent?.position ?? default);
+        }
         public Quaternion rotation;
-        private Transform _parent;
-        public Vector3 localPosition { set { position = (_parent?.position ?? new Vector3()) + value; } }
         public Vector3 forward => rotation.Forward.sqrMagnitude > 0f ? rotation.Forward : new Vector3(0, 0, 1);
         public Vector3 right => new Vector3(forward.z, 0, -forward.x);
-        public void SetParent(Transform parent, bool worldPositionStays) => _parent = parent;
-        public bool IsChildOf(Transform target) => _parent != null && (_parent == target || _parent.IsChildOf(target));
+        public void SetParent(Transform newParent, bool worldPositionStays)
+        {
+            Vector3 worldPosition = position;
+            parent = newParent;
+            if (worldPositionStays) position = worldPosition;
+        }
+        public bool IsChildOf(Transform target) => parent != null && (parent == target || parent.IsChildOf(target));
     }
     public struct Vector3
     {
@@ -125,6 +146,17 @@ namespace UnityEngine
     {
         public bool isTrigger;
         public bool enabled = true;
+        public Bounds bounds => new Bounds(transform.position, new Vector3(0.5f, 0.5f, 0.5f));
+    }
+    public struct Bounds
+    {
+        public Vector3 center;
+        public Vector3 extents;
+        public Bounds(Vector3 center, Vector3 size) { this.center = center; extents = size * 0.5f; }
+    }
+    public class Rigidbody : Component
+    {
+        public bool isKinematic;
     }
     public struct RaycastHit
     {

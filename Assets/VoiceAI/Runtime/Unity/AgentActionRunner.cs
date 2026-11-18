@@ -38,6 +38,8 @@ namespace AgentEscape.VoiceAI
         private AgentBodyController _body;
         private float _autonomousRadius;
         private IReadOnlyDictionary<string, AgentInteractable> _expectedTargets;
+        private AgentInteractable _requiredHeldObject;
+        private bool _requireHeldObject;
         private AgentInteractable _selectedTarget;
         private AgentAction _lastAction;
         private bool? _lastActionSucceeded;
@@ -46,6 +48,8 @@ namespace AgentEscape.VoiceAI
             _stage.TryResolve(_selectedTarget.id, out var current) && current == _selectedTarget ? current : null;
 
         internal AgentAction CurrentActionForContext => CopyForContext(CurrentAction);
+        public AgentInteractable CurrentHeldObject => _body == null ? null : _body.CurrentHeldObject;
+        internal AgentInteractable LastDroppedObject => _body == null ? null : _body.LastDroppedObject;
         private AgentAction CurrentAction => _active && _actions != null && _index >= 0 && _index < _actions.Count
             ? _actions[_index] : null;
 
@@ -86,6 +90,7 @@ namespace AgentEscape.VoiceAI
         {
             if (_body != null && _body != body) throw new InvalidOperationException("한 VoiceAgent에는 하나의 Body만 연결할 수 있습니다.");
             _body = body;
+            _stage.BindCarryBody(body);
         }
 
         internal void DetachBody(AgentBodyController body)
@@ -93,6 +98,7 @@ namespace AgentEscape.VoiceAI
             if (_body != body) return;
             Cancel("로봇이 비활성화되었습니다.");
             _body = null;
+            _stage.BindCarryBody(null);
         }
 
         public bool IsCurrent(AgentCommandId id) => _active && CurrentCommand.Equals(id) && isActiveAndEnabled;
@@ -129,11 +135,13 @@ namespace AgentEscape.VoiceAI
         }
 
         internal void Submit(AgentCommandId id, IEnumerable<AgentAction> actions, string rejection,
-            IReadOnlyDictionary<string, AgentInteractable> expectedTargets = null)
+            IReadOnlyDictionary<string, AgentInteractable> expectedTargets = null, AgentInteractable requiredHeldObject = null)
         {
             if (!IsCurrent(id) || State != AgentExecutionState.AwaitingInterpretation) return;
             if (rejection != null) { Finish(AgentExecutionOutcome.Rejected, rejection); return; }
             _expectedTargets = expectedTargets;
+            _requiredHeldObject = requiredHeldObject;
+            _requireHeldObject = requiredHeldObject != null;
             _actions = actions.Select(AgentCommandRules.Copy).ToList();
             if (CurrentSource == AgentCommandSource.Autonomous && _actions.Any(a =>
                 a == null || (a.Verb != AgentVocabulary.MoveTo && a.Verb != AgentVocabulary.Inspect)))
@@ -230,12 +238,15 @@ namespace AgentEscape.VoiceAI
         private string ValidateCurrent()
         {
             if (_body == null || !_body.isActiveAndEnabled) return "활성 AgentBodyController가 없습니다.";
+            if (_requireHeldObject && (_requiredHeldObject == null || CurrentHeldObject != _requiredHeldObject))
+                return "이동에 필요한 물체를 더 이상 들고 있지 않습니다.";
             var action = CurrentAction;
-            _validationContext.Inventory = _stage.inventory;
+            _stage.CopyInventoryTo(_validationContext.Inventory);
             _validationContext.Objects.Clear();
+            AgentInteractable actual = null;
             if (action?.Target != null)
             {
-                if (!_stage.TryResolve(action.Target, out var actual))
+                if (!_stage.TryResolve(action.Target, out actual))
                     return "지정한 대상을 찾지 못했거나 대상 ID가 중복되었습니다.";
                 if (_expectedTargets != null &&
                     (!_expectedTargets.TryGetValue(action.Target, out var expected) || expected != actual))
@@ -244,14 +255,16 @@ namespace AgentEscape.VoiceAI
                     return "누를 수 있는 버튼을 찾지 못했습니다.";
                 _validationContext.Objects.Add(actual.ToStageObject());
             }
-            string error = AgentResponseParser.CheckAction(action, _validationContext, _owner.Trust);
+            string error = action == null ? null : _body.CheckCarryAction(action, actual);
+            if (error != null) return error;
+            error = AgentResponseParser.CheckAction(action, _validationContext, _owner.Trust);
             if (error != null) return error;
             if (CurrentSource == AgentCommandSource.Autonomous)
             {
                 if (action.Verb != AgentVocabulary.MoveTo && action.Verb != AgentVocabulary.Inspect)
                     return "자율 탐색은 이동·조사만 허용합니다.";
                 if (!_stage.TryResolve(action.Target, out var target) || !target.allowAutonomousExploration || target.HasBeenInspected ||
-                    _stage.inventory.Contains(action.Target) || target.transform == _body.transform ||
+                    target == CurrentHeldObject || target.transform == _body.transform ||
                     _body.transform.IsChildOf(target.transform) || target.transform.IsChildOf(_body.transform))
                     return "현재 조사할 수 없는 탐색 대상입니다.";
                 if ((target.transform.position - _body.transform.position).sqrMagnitude > _autonomousRadius * _autonomousRadius)
@@ -328,6 +341,8 @@ namespace AgentEscape.VoiceAI
             }
             _active = false;
             _expectedTargets = null;
+            _requiredHeldObject = null;
+            _requireHeldObject = false;
             _actions = null;
             PendingIntent = "";
             LastResult = message;

@@ -11,8 +11,26 @@ namespace AgentEscape.VoiceAI
         [Range(0, 3), Tooltip("0: 잘 알아들음, 1: 가끔 오해, 2: 자주 오해, 3: 대부분 오해")]
         public int confusionLevel = 1;
         public string agentLocation = "방 중앙";
-        [Tooltip("요원이 들고 있는 오브젝트 ID")]
-        public List<string> inventory = new List<string>();
+        private AgentBodyController _carryBody;
+        public AgentInteractable CurrentHeldObject => _carryBody == null ? null : _carryBody.CurrentHeldObject;
+
+        public IReadOnlyList<string> inventory
+        {
+            get
+            {
+                var held = CurrentHeldObject;
+                return held == null || string.IsNullOrWhiteSpace(held.id) ? System.Array.Empty<string>() : new[] { held.id };
+            }
+        }
+
+        internal void BindCarryBody(AgentBodyController body) => _carryBody = body;
+
+        internal void CopyInventoryTo(List<string> destination)
+        {
+            destination.Clear();
+            var held = CurrentHeldObject;
+            if (held != null && !string.IsNullOrWhiteSpace(held.id)) destination.Add(held.id);
+        }
         [Tooltip("씬에 AgentInteractable이 없으면 시험용 오브젝트를 사용한다.")]
         public bool useDemoObjectsWhenEmpty = true;
 
@@ -90,9 +108,9 @@ namespace AgentEscape.VoiceAI
                 StageId = stageId,
                 Brief = brief,
                 ConfusionLevel = confusionLevel,
-                AgentLocation = agentLocation,
-                Inventory = new List<string>(inventory)
+                AgentLocation = agentLocation
             };
+            CopyInventoryTo(context.Inventory);
 
             var items = new Dictionary<string, AgentInteractable>(System.StringComparer.Ordinal);
             foreach (var item in AgentInteractable.Active)

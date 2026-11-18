@@ -76,7 +76,7 @@ namespace AgentEscape.VoiceAI
             text.AppendLine("요원 위치: " + Limit(context.AgentLocation) + Position(context.AgentPositionX, context.AgentPositionY, context.AgentPositionZ));
             if (context.AgentHeading.HasValue) text.AppendLine("요원 월드 Y축 방향(도): " + Format(context.AgentHeading.Value));
             text.AppendLine("신뢰도: " + trust + "/100");
-            text.AppendLine("가진 물건: " + (context.Inventory.Count == 0 ? "없음" : string.Join(", ", context.Inventory)));
+            text.AppendLine("현재 들고 있는 물체 ID: " + (context.Inventory.Count == 0 ? "없음" : string.Join(", ", context.Inventory)));
             if (!string.IsNullOrEmpty(context.SelectedTargetId))
                 text.AppendLine("직전에 선택한 대상 ID: " + Limit(context.SelectedTargetId));
             if (context.LastAction != null)
@@ -187,7 +187,7 @@ namespace AgentEscape.VoiceAI
             .GroupBy(item => item.Id, System.StringComparer.Ordinal)
             .Where(group => group.Count() == 1)
             .Select(group => group.First())
-            .OrderByDescending(item => item.Id == context.SelectedTargetId ||
+            .OrderByDescending(item => context.Inventory.Contains(item.Id) || item.Id == context.SelectedTargetId ||
                 item.Id == context.CurrentAction?.Target || item.Id == context.LastAction?.Target)
             .ThenBy(item => item.Id, System.StringComparer.Ordinal)
             .Take(MaxSceneObjects);

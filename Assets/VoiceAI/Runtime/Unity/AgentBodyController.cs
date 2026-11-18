@@ -26,8 +26,23 @@ namespace AgentEscape.VoiceAI
         public event System.Action<float> MotionUpdated;
         public bool IsMoving => _action != null && _moving && isActiveAndEnabled;
 
+        public AgentInteractable CurrentHeldObject
+        {
+            get
+            {
+                ReconcileCarry();
+                return !_releaseCarryRequested && IsAttached(_carry) ? _carry.Target : null;
+            }
+        }
+
+        internal AgentInteractable LastDroppedObject => _lastDropped != null ? _lastDropped : null;
+
         private AgentAction _action;
         private AgentInteractable _target;
+        private CarryAttachment _carry;
+        private AgentInteractable _lastDropped;
+        private bool _changingCarry;
+        private bool _releaseCarryRequested;
         private Vector3 _destination;
         private AgentButton _button;
         private bool _moving;
@@ -53,15 +68,20 @@ namespace AgentEscape.VoiceAI
 
         private void OnEnable()
         {
+            ReconcileCarry();
             if (voiceAgent != null) voiceAgent.RegisterBody(this);
             else Debug.LogError("[VoiceAI] Body의 VoiceAgent를 Inspector에서 지정해 주세요.", this);
         }
 
         private void OnDisable()
         {
+            _releaseCarryRequested = true;
             CancelCurrentAction();
+            ReconcileCarry();
             if (voiceAgent != null) voiceAgent.UnregisterBody(this);
         }
+
+        private void Update() => ReconcileCarry();
 
         public void CancelCurrentAction()
         {
@@ -111,6 +131,8 @@ namespace AgentEscape.VoiceAI
                 return MovementError();
             }
             if (!stage.TryResolve(action.Target, out _target)) return "대상이 없거나 ID가 중복되었습니다: " + action.Target;
+            string carryError = CheckCarryAction(action, _target);
+            if (carryError != null) return carryError;
             if (action.Verb == AgentVocabulary.Drop) return null;
             _button = _target.Button;
             if (action.Verb == AgentVocabulary.Press)
@@ -150,6 +172,207 @@ namespace AgentEscape.VoiceAI
 
         private string TurningError() => !IsFinite(turnSpeed) || turnSpeed <= 0f
             ? "회전 속도는 유한한 양수여야 합니다." : null;
+
+        internal string CheckCarryAction(AgentAction action, AgentInteractable target)
+        {
+            if (action == null || (action.Verb != AgentVocabulary.PickUp && action.Verb != AgentVocabulary.Drop))
+                return null;
+            if (_changingCarry) return "물체를 옮기는 중입니다.";
+            if (!isActiveAndEnabled) return "로봇이 비활성 상태입니다.";
+
+            var held = CurrentHeldObject;
+            if (action.Verb == AgentVocabulary.Drop)
+            {
+                if (held == null) return "현재 들고 있는 물체가 없습니다.";
+                if (held != target) return $"현재 들고 있는 물체는 {held.displayName}입니다.";
+                return IsFinite(stopDistance) ? null : "내려놓을 거리가 올바르지 않습니다.";
+            }
+
+            if (held != null)
+                return held == target ? "이미 이 물체를 들고 있습니다." : $"{held.displayName}부터 내려놓아 주세요.";
+            if (_carry != null) return "이전 물체의 부착을 정리하는 중입니다.";
+            if (target == null || !target.isActiveAndEnabled) return "집을 수 있는 대상이 없습니다.";
+            if (target.transform == transform || transform.IsChildOf(target.transform))
+                return "로봇 자신이나 부모는 집을 수 없습니다.";
+            if (target.GetComponentInParent<AgentBodyController>() != null) return "이미 로봇에 부착된 물체입니다.";
+            return IsFinite(carryHeight) ? null : "물체를 들 높이가 올바르지 않습니다.";
+        }
+
+        private bool IsAttached(CarryAttachment attachment) => attachment != null &&
+            attachment.Target != null && attachment.Target.isActiveAndEnabled &&
+            attachment.Root != null && attachment.Root.parent == transform;
+
+        private void ReconcileCarry()
+        {
+            if (_changingCarry) return;
+            var attachment = _carry;
+            if (attachment == null)
+            {
+                _releaseCarryRequested = false;
+                return;
+            }
+            if (!_releaseCarryRequested && IsAttached(attachment)) return;
+
+            _changingCarry = true;
+            try
+            {
+                if (attachment.Root != null && attachment.Root.parent == transform)
+                {
+                    // A parent GameObject may be in the middle of its own activation change.
+                    // Restore physics now and finish detaching on enable if the hierarchy is inactive.
+                    if (!gameObject.activeInHierarchy)
+                    {
+                        attachment.RestorePhysics();
+                        return;
+                    }
+                    attachment.Root.SetParent(null, true);
+                    if (attachment.Root != null && attachment.Root.parent == transform) return;
+                }
+                attachment.RestorePhysics();
+                _carry = null;
+                _releaseCarryRequested = false;
+            }
+            finally { _changingCarry = false; }
+        }
+
+        private string TryPickUp(AgentAction action, AgentInteractable target)
+        {
+            string error = CheckCarryAction(action, target);
+            if (error != null) return error;
+
+            var attachment = new CarryAttachment(target);
+            var previousParent = attachment.Root.parent;
+            Vector3 previousPosition = attachment.Root.position;
+            _changingCarry = true;
+            try
+            {
+                attachment.SuspendPhysics();
+                attachment.Root.SetParent(transform, true);
+                if (_releaseCarryRequested || !isActiveAndEnabled || !IsAttached(attachment))
+                    return "물체를 로봇에 부착하지 못했습니다.";
+                attachment.Root.localPosition = Vector3.up * carryHeight;
+                _carry = attachment;
+                return null;
+            }
+            finally
+            {
+                try
+                {
+                    if (_carry != attachment)
+                    {
+                        if (attachment.Root != null && attachment.Root.parent == transform)
+                        {
+                            attachment.Root.SetParent(previousParent, true);
+                            if (attachment.Root != null) attachment.Root.position = previousPosition;
+                        }
+                        if (attachment.Root != null && attachment.Root.parent == transform)
+                        {
+                            _carry = attachment;
+                            _releaseCarryRequested = true;
+                        }
+                        else attachment.RestorePhysics();
+                    }
+                }
+                finally
+                {
+                    _changingCarry = false;
+                    if (_releaseCarryRequested) ReconcileCarry();
+                }
+            }
+        }
+
+        private string TryDrop(AgentAction action, AgentInteractable target)
+        {
+            string error = CheckCarryAction(action, target);
+            if (error != null) return error;
+
+            var attachment = _carry;
+            Physics.SyncTransforms();
+            float bodyRadius = IsFinite(obstacleRadius) ? Mathf.Max(0.05f, obstacleRadius) : 0.05f;
+            foreach (var collider in GetComponentsInChildren<Collider>(false))
+                bodyRadius = Mathf.Max(bodyRadius, PlanarExtent(collider, transform.position));
+            float clearance = bodyRadius + attachment.PlanarRadius + 0.05f;
+            if (!IsFinite(clearance)) return "내려놓을 위치를 계산하지 못했습니다.";
+            Vector3 forward = transform.forward;
+            forward.y = 0f;
+            if (!IsFinite(forward.sqrMagnitude) || forward.sqrMagnitude < 0.0001f)
+                return "로봇의 수평 방향을 확인할 수 없습니다.";
+            Vector3 dropPosition = transform.position + forward.normalized * Mathf.Max(clearance, stopDistance);
+            _changingCarry = true;
+            try
+            {
+                attachment.Root.SetParent(null, true);
+                if (attachment.Root == null || attachment.Root.parent != null || target == null || !target.isActiveAndEnabled)
+                    return "물체를 내려놓지 못했습니다.";
+                attachment.Root.position = dropPosition;
+                attachment.RestorePhysics();
+                _carry = null;
+                _lastDropped = target;
+                return null;
+            }
+            finally
+            {
+                _changingCarry = false;
+                ReconcileCarry();
+            }
+        }
+
+        private static float PlanarExtent(Collider collider, Vector3 reference)
+        {
+            if (collider == null || !collider.enabled || collider.isTrigger) return 0f;
+            var bounds = collider.bounds;
+            if (bounds.extents.sqrMagnitude == 0f) return 0f;
+            Vector3 offset = bounds.center - reference;
+            float side = System.Math.Abs(offset.x) + bounds.extents.x;
+            float depth = System.Math.Abs(offset.z) + bounds.extents.z;
+            return new Vector3(side, 0f, depth).magnitude;
+        }
+
+        private sealed class CarryAttachment
+        {
+            internal readonly AgentInteractable Target;
+            internal readonly Transform Root;
+            internal readonly float PlanarRadius;
+            private readonly (Rigidbody Body, bool WasKinematic)[] _bodies;
+            private readonly (Collider Collider, bool WasEnabled)[] _colliders;
+            private bool _physicsSuspended;
+
+            internal CarryAttachment(AgentInteractable target)
+            {
+                Target = target;
+                Root = target.transform;
+                var bodies = target.GetComponentsInChildren<Rigidbody>(true);
+                _bodies = new (Rigidbody, bool)[bodies.Length];
+                for (int i = 0; i < bodies.Length; i++) _bodies[i] = (bodies[i], bodies[i].isKinematic);
+                var colliders = target.GetComponentsInChildren<Collider>(true);
+                _colliders = new (Collider, bool)[colliders.Length];
+                Physics.SyncTransforms();
+                for (int i = 0; i < colliders.Length; i++)
+                {
+                    _colliders[i] = (colliders[i], colliders[i].enabled);
+                    PlanarRadius = Mathf.Max(PlanarRadius, PlanarExtent(colliders[i], Root.position));
+                }
+            }
+
+            internal void SuspendPhysics()
+            {
+                _physicsSuspended = true;
+                foreach (var entry in _bodies)
+                    if (entry.Body != null && !entry.WasKinematic) entry.Body.isKinematic = true;
+                foreach (var entry in _colliders)
+                    if (entry.Collider != null && entry.WasEnabled) entry.Collider.enabled = false;
+            }
+
+            internal void RestorePhysics()
+            {
+                if (!_physicsSuspended) return;
+                foreach (var entry in _bodies)
+                    if (entry.Body != null) entry.Body.isKinematic = entry.WasKinematic;
+                foreach (var entry in _colliders)
+                    if (entry.Collider != null) entry.Collider.enabled = entry.WasEnabled;
+                _physicsSuspended = false;
+            }
+        }
 
         private bool IsObstacle(Collider collider) => collider != null &&
             collider.transform != transform && !collider.transform.IsChildOf(transform);
@@ -264,20 +487,16 @@ namespace AgentEscape.VoiceAI
                     message = buttonName + " 버튼 이벤트를 실행했습니다.";
                     break;
                 case AgentVocabulary.PickUp:
-                    if (_target.transform == transform || transform.IsChildOf(_target.transform))
-                    { message = "로봇 자신이나 부모는 집을 수 없습니다."; return true; }
-                    _target.transform.SetParent(transform, true);
-                    _target.transform.localPosition = Vector3.up * carryHeight;
-                    _target.state = "요원이 들고 있음";
-                    stage.inventory.Add(_target.id);
-                    message = _target.displayName + "을(를) 집었습니다.";
+                    string pickedName = _target.displayName;
+                    message = TryPickUp(_action, _target);
+                    if (message != null) return true;
+                    message = pickedName + "을(를) 집었습니다.";
                     break;
                 case AgentVocabulary.Drop:
-                    _target.transform.SetParent(null, true);
-                    _target.transform.position = transform.position + transform.forward * Mathf.Max(0.05f, stopDistance);
-                    _target.state = "바닥에 있음";
-                    stage.inventory.Remove(_target.id);
-                    message = _target.displayName + "을(를) 내려놓았습니다.";
+                    string droppedName = _target.displayName;
+                    message = TryDrop(_action, _target);
+                    if (message != null) return true;
+                    message = droppedName + "을(를) 내려놓았습니다.";
                     break;
                 default: message = "지원하지 않는 행동입니다."; return true;
             }

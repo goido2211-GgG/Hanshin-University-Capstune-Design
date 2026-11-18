@@ -96,8 +96,15 @@ namespace AgentEscape.VoiceAI
                 return;
             }
 
-            foreach (var action in actions)
+            string plannedHeld = context.Inventory.Count == 1 ? context.Inventory[0] : null;
+            foreach (var proposed in actions)
             {
+                var action = proposed;
+                if (action?.Verb == AgentVocabulary.Drop && string.IsNullOrWhiteSpace(action.Target) && plannedHeld != null)
+                {
+                    action = AgentCommandRules.Copy(action);
+                    action.Target = plannedHeld;
+                }
                 string reason = response.Comprehension != AgentVocabulary.Understood
                     ? "확실하게 이해한 명령만 실행합니다."
                     : CheckAction(action, context, trust, checkInventory);
@@ -111,6 +118,8 @@ namespace AgentEscape.VoiceAI
                 }
 
                 accepted.Add(action);
+                if (action.Verb == AgentVocabulary.PickUp && plannedHeld == null) plannedHeld = action.Target;
+                if (action.Verb == AgentVocabulary.Drop && plannedHeld == action.Target) plannedHeld = null;
             }
         }
 
@@ -143,7 +152,8 @@ namespace AgentEscape.VoiceAI
                 return "말할 문장을 120자 이내로 지정해 주세요.";
             if (noTarget) return null;
 
-            if (string.IsNullOrWhiteSpace(action.Target)) return "어느 대상을 말씀하시는 건가요?";
+            if (string.IsNullOrWhiteSpace(action.Target))
+                return action.Verb == AgentVocabulary.Drop ? "현재 들고 있는 물체가 없습니다." : "어느 대상을 말씀하시는 건가요?";
             var targets = context.Objects.Where(o => o.Id == action.Target).ToArray();
             if (targets.Length == 0) return "지정한 대상을 씬에서 찾지 못했습니다.";
             if (targets.Length != 1) return "대상 ID가 중복되었습니다.";

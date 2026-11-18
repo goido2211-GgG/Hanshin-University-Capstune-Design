@@ -28,11 +28,24 @@ namespace AgentEscape.VoiceAI
         private static readonly Regex NegatedPress = new Regex(@"누르지|누르면\s*안|작동하지|작동시키지");
         private static readonly Regex Pickup = new Regex(
             @"^(?<selector>.*?)\s*(?:을|를)?\s*(?:좀\s*)?(?:(?:집어|주워)(?:\s*줘|주세요|라)?|집으세요|주우세요)$");
+        private const string DropPrefix = @"^(?:(?:이제|그럼)\s+)?(?<selector>.*?)\s*(?:을|를)?\s*(?:(?:바닥에|여기에?|이 자리에|제자리에|손에서)\s*)?(?:좀\s*)?";
+        private static readonly Regex Drop = new Regex(DropPrefix +
+            @"(?:(?:내려\s*(?:놔|놓아)|떨어뜨려)(?:\s*(?:줘|주세요|라))?|내려\s*놓으세요|떨어뜨리세요)$");
+        private static readonly Regex HeldPlacement = new Regex(DropPrefix +
+            @"(?:(?:두어|둬|놔|놓아|내려\s*(?:놔|놓아))(?:\s*(?:줘|주세요|줄래|줄 수 있어))?|두세요|놓으세요)$");
+        private static readonly Regex ImpliedDrop = new Regex(
+            @"^(?:상자|그거|그걸|그것(?:을)?|들고\s*있는\s*(?:상자|거|것|물건)|손에\s*(?:든|쥔|잡은|들고\s*있는|쥐고\s*있는)\s*(?:상자|거|것|물건))$");
+        private static readonly Regex Repick = new Regex(
+            @"^(?:이제\s+)?다시\s*(?:집어|주워)(?:\s*(?:줘|주세요))?$");
+        private static readonly Regex CarryMove = new Regex(
+            @"^(?:(?:이제|그럼)\s+)?(?:(?:그거|그걸|그것을)\s*)?들고\s+(?<move>.+)$");
         private static readonly Regex PickupIntent = new Regex(
             @"(?:집어|집고|집으세요|집을래|주워|줍고|주우세요|들어\s*올려|들고|회수해|가져와)(?=$|[\s,.!?。！？]|줘|주세요|줄래|라)");
         private static readonly Regex NegatedPickup = new Regex(
             @"집지|줍지|집으면\s*안|주우면\s*안|들지\s*말|들어\s*올리지|회수하지|손대지|건드리지");
-        private static readonly Regex ConditionalPickup = new Regex(@"만약|있으면|가능하면|필요하면|필요하다면|라면|다음에");
+        private static readonly Regex ConditionalAction = new Regex(@"만약|있으면|가능하면|필요하면|필요하다면|라면|다음에");
+        private static readonly Regex NegatedDrop = new Regex(
+            @"내려\s*놓지|내려\s*놓으면\s*안|떨어뜨리지|떨어뜨리면\s*안");
         private static readonly Regex SimpleCategory = new Regex(
             @"^(?:(?:[가-힣]+|[a-z0-9]+)\s*)?(?:상자|버튼|box|button)(?:\s*[a-z0-9]+(?:번)?)?(?:이요|을|를|요)?$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -94,11 +107,48 @@ namespace AgentEscape.VoiceAI
             selector = null;
             string normalized = Normalize(text);
             if (normalized.Length > 160 || HasQuestionMark(text) || NegatedPickup.IsMatch(normalized) ||
-                ConditionalPickup.IsMatch(normalized)) return false;
+                ConditionalAction.IsMatch(normalized)) return false;
             var match = Pickup.Match(normalized);
             if (!match.Success || AdditionalAction.IsMatch(match.Groups["selector"].Value)) return false;
             selector = match.Groups["selector"].Value.Trim();
             verb = AgentVocabulary.PickUp;
+            return true;
+        }
+
+        internal static bool TryParseDropCommand(string text, out string selector)
+        {
+            selector = null;
+            string normalized = Normalize(text);
+            if (normalized.Length > 160 || HasQuestionMark(text) || NegatedDrop.IsMatch(normalized) ||
+                ConditionalAction.IsMatch(normalized)) return false;
+            return TryReadDropSelector(Drop.Match(normalized), out selector);
+        }
+
+        internal static bool IsImplicitDropReference(string selector) =>
+            string.IsNullOrWhiteSpace(selector) || ImpliedDrop.IsMatch(Normalize(selector));
+
+        private static bool TryReadDropSelector(Match match, out string selector)
+        {
+            selector = null;
+            if (!match.Success) return false;
+            string descriptor = match.Groups["selector"].Value.Trim();
+            if (AdditionalAction.IsMatch(descriptor) || Drop.IsMatch(descriptor)) return false;
+            selector = !IsImplicitDropReference(descriptor) ? descriptor :
+                Regex.IsMatch(descriptor, @"상자(?:를)?$") ? "상자" : "";
+            return true;
+        }
+
+        internal static bool IsRepickCommand(string text) => !HasQuestionMark(text) && Repick.IsMatch(Normalize(text));
+
+        internal static bool TryParseCarryMove(string text, out AgentAction[] actions)
+        {
+            actions = Array.Empty<AgentAction>();
+            string normalized = Normalize(text);
+            if (normalized.Length > 160 || HasQuestionMark(text)) return false;
+            var match = CarryMove.Match(normalized);
+            if (!match.Success || !AgentCommandRules.TryParseMotionCommand(match.Groups["move"].Value, out var motion) ||
+                motion.Length == 0 || motion[0].Verb != AgentVocabulary.MoveDirection) return false;
+            actions = motion;
             return true;
         }
 
@@ -114,6 +164,7 @@ namespace AgentEscape.VoiceAI
             if (normalized.Length == 0 || normalized.Length > 80 || HasQuestionMark(text) ||
                 HasPickupIntent(normalized) || NegatedPickup.IsMatch(normalized) || AdditionalAction.IsMatch(normalized) ||
                 PressRequest.IsMatch(normalized) || AgentCommandRules.IsStop(normalized) ||
+                TryParseDropCommand(text, out _) || TryParseCarryMove(text, out _) ||
                 AgentCommandRules.TryParseMotionCommand(normalized, out _)) return false;
 
             string descriptor = SelectionText(normalized);
@@ -182,6 +233,14 @@ namespace AgentEscape.VoiceAI
             if (targeted.Any(action => action.Verb == AgentVocabulary.PickUp) &&
                 (NegatedPickup.IsMatch(normalized) || (HasQuestionMark(text) && !HasPickupIntent(text))))
                 return "물체를 집으라는 지시인지 확인해 주세요.";
+            if (targeted.Any(action => action.Verb == AgentVocabulary.Drop) && NegatedDrop.IsMatch(normalized))
+                return "물체를 내려놓으라는 지시인지 확인해 주세요.";
+            if (actions.Length == 1 && targeted[0].Verb == AgentVocabulary.Drop && context.Inventory.Count == 1 &&
+                context.Inventory[0] == targeted[0].Target && context.Objects.Any(item => item.Id == targeted[0].Target) &&
+                (TryParseDropCommand(normalized, out string dropSelector) ||
+                    TryReadDropSelector(HeldPlacement.Match(normalized), out dropSelector)))
+                return dropSelector.Length == 0 || ResolveSelection(dropSelector, context, context.Inventory).Count == 1
+                    ? null : "지정한 물체를 들고 있지 않습니다.";
             if (press.Length > 0 && (!PressRequest.IsMatch(normalized) || NegatedPress.IsMatch(normalized)))
                 return "버튼을 누르라는 명령인지 확인해 주세요.";
             if (press.Length > 1)
