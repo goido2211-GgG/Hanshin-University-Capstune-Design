@@ -157,9 +157,12 @@ namespace AgentEscape.VoiceAI
             bool allowed = isButtonAction
                 ? target.AllowedVerbs.Contains(AgentVocabulary.Press) || target.AllowedVerbs.Contains(AgentVocabulary.Interact)
                 : target.AllowedVerbs.Contains(action.Verb);
-            if (!allowed) return isButtonAction
-                ? "지정한 대상에 사용할 수 있는 버튼 동작이 없습니다."
-                : "지정한 대상에 이 행동을 실행할 수 없습니다.";
+            if (!allowed)
+            {
+                if (isButtonAction) return "지정한 대상에 사용할 수 있는 버튼 동작이 없습니다.";
+                if (action.Verb == AgentVocabulary.PickUp) return "대상을 찾았지만 집을 수 없는 물체입니다.";
+                return "지정한 대상에 이 행동을 실행할 수 없습니다.";
+            }
             if (trust < target.MinTrust) return target.DisplayName + " 조작에 신뢰도 " + target.MinTrust + " 필요 (현재 " + trust + ")";
             return null;
         }

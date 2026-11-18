@@ -98,7 +98,10 @@ namespace AgentEscape.VoiceAI
                 text.Append("- ").Append(item.Id).Append(" (").Append(Limit(item.DisplayName)).Append(")")
                     .Append(Position(item.PositionX, item.PositionY, item.PositionZ));
                 if (!string.IsNullOrWhiteSpace(item.SceneName)) text.Append(" / 오브젝트 이름: ").Append(Limit(item.SceneName));
-                if (item.Aliases.Count > 0) text.Append(" / 별칭: ").Append(string.Join(", ", item.Aliases.Take(6).Select(alias => Limit(alias, 40))));
+                var aliases = item.Aliases.Where(alias => !string.IsNullOrWhiteSpace(alias))
+                    .Select(alias => Limit(alias.Trim(), 40)).Distinct(System.StringComparer.OrdinalIgnoreCase).Take(6).ToArray();
+                if (aliases.Length > 0) text.Append(" / 별칭: ").Append(string.Join(", ", aliases));
+                if (!string.IsNullOrWhiteSpace(item.Color)) text.Append(" / 지정 색상: ").Append(Limit(item.Color.Trim(), 40));
                 if (!string.IsNullOrWhiteSpace(item.Description)) text.Append(" / 설명: ").Append(Limit(item.Description, 160));
                 if (!string.IsNullOrWhiteSpace(item.State)) text.Append(" / 상태: ").Append(Limit(item.State));
                 text.Append(" / 가능한 동작: ").Append(string.Join(", ", verbs.Distinct()));
@@ -160,6 +163,8 @@ namespace AgentEscape.VoiceAI
                     ["emotion"] = Enum(AgentVocabulary.Emotions),
                     ["comprehension"] = Enum(AgentVocabulary.Comprehension),
                     ["interpretation"] = new JObject { ["type"] = "string", ["description"] = "요원이 명령을 어떻게 이해했는지 한 문장" },
+                    ["clarify_verb"] = NullableEnum(AgentVocabulary.TargetClarificationVerbs,
+                        "대상이 불분명한 명시적 행동을 다시 물을 때만 이해한 동사. 그 외에는 null."),
                     ["trust_delta"] = new JObject { ["type"] = "integer", ["description"] = "이번 발화로 인한 신뢰도 변화. -10~10" },
                     ["actions"] = new JObject
                     {
@@ -168,7 +173,7 @@ namespace AgentEscape.VoiceAI
                         ["description"] = "순서대로 실행할 행동 목록. 최대 5개."
                     }
                 },
-                ["required"] = new JArray("speech", "emotion", "comprehension", "interpretation", "trust_delta", "actions")
+                ["required"] = new JArray("speech", "emotion", "comprehension", "interpretation", "clarify_verb", "trust_delta", "actions")
             };
         }
 

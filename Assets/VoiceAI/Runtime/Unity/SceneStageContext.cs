@@ -19,6 +19,7 @@ namespace AgentEscape.VoiceAI
         public bool TryResolve(string id, out AgentInteractable target)
         {
             target = null;
+            if (string.IsNullOrWhiteSpace(id)) return false;
             foreach (var item in AgentInteractable.Active)
             {
                 if (item == null || !item.isActiveAndEnabled || item.gameObject.scene != gameObject.scene || item.id != id) continue;
@@ -41,6 +42,7 @@ namespace AgentEscape.VoiceAI
                 if (!string.IsNullOrEmpty(selector) &&
                     !AgentButton.Matches(candidate.name, selector) &&
                     (item == null || (!AgentButton.Matches(item.id, selector) && !AgentButton.Matches(item.displayName, selector))) &&
+                    (item?.aliases == null || !item.aliases.Exists(alias => AgentButton.Matches(alias, selector))) &&
                     (button == null || !button.MatchesAlias(selector))) continue;
 
                 if (match != null) return "버튼이 여러 개입니다. 고유한 이름이나 번호를 입력해 주세요.";
@@ -125,7 +127,7 @@ namespace AgentEscape.VoiceAI
                     var button = item.Button;
                     if (button != null)
                     {
-                        description.Aliases.AddRange(button.aliases);
+                        if (button.aliases != null) description.Aliases.AddRange(button.aliases);
                         description.CanInteract = button.ConfigurationError() == null;
                     }
                     else

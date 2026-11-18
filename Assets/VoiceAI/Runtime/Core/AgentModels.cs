@@ -30,6 +30,8 @@ namespace AgentEscape.VoiceAI
             PickUp, Drop, Use, Open, Close, Push, Pull, Press, Interact
         };
 
+        internal static readonly string[] TargetClarificationVerbs = { PickUp, MoveTo, Inspect, Interact, Press };
+
         /// <summary>대상 없이 실행할 수 있는 동사.</summary>
         public static readonly HashSet<string> NoTargetVerbs = new HashSet<string>
         {
@@ -89,6 +91,7 @@ namespace AgentEscape.VoiceAI
         [JsonProperty("emotion")] public string Emotion = "neutral";
         [JsonProperty("comprehension")] public string Comprehension = AgentVocabulary.Understood;
         [JsonProperty("interpretation")] public string Interpretation = "";
+        [JsonProperty("clarify_verb")] public string ClarifyVerb;
         [JsonProperty("trust_delta")] public int TrustDelta;
         [JsonProperty("actions")] public List<AgentAction> Actions = new List<AgentAction>();
     }
@@ -183,6 +186,7 @@ namespace AgentEscape.VoiceAI
         public string DisplayName;
         public string SceneName;
         public List<string> Aliases = new List<string>();
+        public string Color;
         public float? PositionX;
         public float? PositionY;
         public float? PositionZ;

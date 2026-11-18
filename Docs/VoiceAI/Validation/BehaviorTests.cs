@@ -859,6 +859,169 @@ internal static class BehaviorTests
                 state.Contains("진행 중인 행동: move_direction") && state.Contains("마지막 행동: move_direction") &&
                 state.Contains("/ 실패"), "interrupted context or wait/speak ordering failed");
         }));
+        await Test("six red box labels resolve to the same registered pickup", () => Sync(() =>
+        {
+            foreach (string label in new[] { "빨간 상자", "빨간상자", "빨간색 상자", "붉은 상자", "RedBox", "red box" })
+            {
+                var f = new Fixture(apiAvailable: false);
+                f.Box.gameObject.name = "RedBox";
+                f.Voice.SendChat(label + " 집어."); f.Tick(8, 160);
+                Check(f.Stage.inventory.SequenceEqual(new[] { "red_box" }) &&
+                    f.Endings.Last().Outcome == AgentExecutionOutcome.Completed, "label did not resolve: " + label);
+            }
+        }));
+        await Test("color-only answer resumes ambiguous pickup and can correct its color", () => Sync(() =>
+        {
+            foreach (string reply in new[] { "빨간색.", "파란색 말고 빨간색." })
+            {
+                var f = new Fixture(apiAvailable: false);
+                var blue = new GameObject().AddComponent<AgentInteractable>();
+                blue.id = "blue_box"; blue.displayName = "파란 상자";
+                blue.allowedVerbs.Add(AgentVocabulary.PickUp);
+                f.Voice.SendChat("상자 집어.");
+                Check(f.Voice.IsAwaitingTarget && f.Endings.Last().Message.Contains("2개") &&
+                    f.Stage.inventory.Count == 0, "generic pickup did not ask");
+                f.Voice.SendChat(reply); f.Tick(8, 160);
+                Check(!f.Voice.IsAwaitingTarget && f.Stage.inventory.SequenceEqual(new[] { "red_box" }),
+                    "follow-up did not resume original pickup: " + reply);
+            }
+        }));
+        await Test("remembered target and authored metadata support pickup", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Box.displayName = "보급 상자";
+            f.Box.id = "supply_a";
+            f.Box.color = "red";
+            f.Box.aliases.Add("보급품 A");
+            f.Voice.SendChat("빨간색 상자 집어."); f.Tick(8, 160);
+            Check(f.Stage.inventory.Contains("supply_a"), "explicit color was not respected");
+            f.Submit(new AgentAction { Verb = AgentVocabulary.Drop, Target = "supply_a" }); f.Tick(5, 100);
+            f.Voice.SendChat("그거 집어."); f.Tick(8, 160);
+            Check(f.Stage.inventory.Contains("supply_a"), "reference did not reuse selected object");
+        }));
+        await Test("missing and duplicate boxes ask without guessing, and pickup permission is explicit", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.SendChat("초록 상자 집어.");
+            Check(f.Voice.IsAwaitingTarget && f.Endings.Last().Message.Contains("찾지 못했습니다"), "missing box misreported");
+            f.Voice.SendChat("저쪽에 있는 빨간 상자."); f.Tick(8, 160);
+            Check(f.Stage.inventory.Contains(f.Box.id), "deictic clarification did not recover");
+            f = new Fixture(apiAvailable: false);
+            var duplicate = new GameObject().AddComponent<AgentInteractable>();
+            duplicate.id = "other_red"; duplicate.displayName = "빨간 상자";
+            f.Voice.SendChat("빨간 상자 집어.");
+            f.Voice.SendChat("빨간색.");
+            Check(f.Voice.IsAwaitingTarget && f.Endings.Last().Message.Contains("2개") &&
+                f.Stage.inventory.Count == 0, "duplicate box was guessed");
+            f.Voice.SendChat("other_red.");
+            Check(!f.Voice.IsAwaitingTarget && f.Endings.Last().Message.Contains("집을 수 없는") &&
+                f.Stage.inventory.Count == 0, "pickup permissions were skipped");
+        }));
+        await Test("button clarification uses authored door alias", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 3), "문 옆에 있는");
+            var redReceiver = red.gameObject.AddComponent<ButtonReceiver>(); red.receiver = redReceiver;
+            var blue = CreateButton("blue_button", "파란 버튼", new Vector3(2, 0, 3));
+            var blueReceiver = blue.gameObject.AddComponent<ButtonReceiver>(); blue.receiver = blueReceiver;
+            f.Voice.SendChat("버튼 눌러.");
+            Check(f.Voice.IsAwaitingTarget, "button intent was dropped");
+            f.Voice.SendChat("문 옆에 있는 거."); f.Tick(8, 160);
+            Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 0, "door alias selected wrong button");
+        }));
+        await Test("cancel and replacement discard a remembered unresolved pickup", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.SendChat("초록 상자 집어.");
+            f.Voice.RequestStop();
+            f.Voice.SendChat("빨간색."); f.Tick(5, 100);
+            Check(!f.Voice.IsAwaitingTarget && f.Stage.inventory.Count == 0, "stopped pickup revived");
+            f.Voice.SendChat("초록 상자 집어.");
+            f.Voice.SendChat("오른쪽으로 돌아."); f.Tick(5, 100);
+            f.Voice.SendChat("빨간색."); f.Tick(5, 100);
+            Check(!f.Voice.IsAwaitingTarget && f.Stage.inventory.Count == 0, "replaced pickup revived");
+        }));
+        await Test("Unity resolves API pickup intent to a real ID before execution", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.PickUp, Target = "RedBox" }));
+            f.Voice.SendChat("빨간색 상자 집어."); f.Tick(8, 160);
+            Check(f.Stage.inventory.SequenceEqual(new[] { "red_box" }), "raw model label was treated as an actual ID");
+        }));
+        await Test("free-form API pickup still accepts model intent with registered evidence", () => Sync(() =>
+        {
+            var f = new Fixture();
+            int calls = 0;
+            OpenAIClient.Response = (request, token) =>
+            {
+                ++calls;
+                return Task.FromResult(Reply(0, new AgentAction { Verb = AgentVocabulary.PickUp, Target = "red_box" }));
+            };
+            f.Voice.SendChat("손에 들 수 있게 붉은 상자를 들어 올려."); f.Tick(8, 160);
+            Check(calls == 1 && f.Stage.inventory.SequenceEqual(new[] { "red_box" }),
+                "free-form API pickup required exact local pickup wording");
+        }));
+        await Test("API pickup repair keeps original target identity and permissions", async () =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            f.Box.minTrust = 60;
+            var proposal = new AgentAction { Verb = AgentVocabulary.PickUp, Target = "red_box" };
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(10, proposal));
+            f.Voice.SendChat("빨간 상자 집어."); f.Tick(8, 160);
+            Check(f.Stage.inventory.Count == 0 && f.Endings.Last().Message.Contains("신뢰도"),
+                "repair bypassed trust at interpretation");
+
+            var delayed = new TaskCompletionSource<JObject>();
+            f.Box.minTrust = 0;
+            OpenAIClient.Response = (request, token) => delayed.Task;
+            f.Voice.SendChat("빨간 상자 집어.");
+            f.Box.enabled = false;
+            var replacement = new GameObject().AddComponent<AgentInteractable>();
+            replacement.id = "red_box"; replacement.displayName = "빨간 상자";
+            replacement.allowedVerbs.Add(AgentVocabulary.PickUp);
+            delayed.SetResult(Reply(0, proposal));
+            await Task.Yield();
+            f.Tick(8, 160);
+            Check(f.Stage.inventory.Count == 0 && f.Voice.IsAwaitingTarget &&
+                f.Endings.Last().Message.Contains("대상이 바뀌었습니다"), "late repair rebound to a new instance");
+        });
+        await Test("typed API clarification is resumable and late clarification cannot revive", async () =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            var answer = Reply();
+            answer["output"][0]["content"][0]["text"] = JsonConvert.SerializeObject(new AgentResponse
+            { Comprehension = AgentVocabulary.Asking, ClarifyVerb = AgentVocabulary.PickUp });
+            var late = new TaskCompletionSource<JObject>();
+            OpenAIClient.Response = (request, token) => late.Task;
+            f.Voice.SendChat("손에 들 물건을 정하기 전에 먼저 물어봐 줘.");
+            f.Voice.RequestStop();
+            late.SetResult(answer);
+            await Task.Delay(30);
+            Check(!f.Voice.IsAwaitingTarget && f.Stage.inventory.Count == 0, "late response recreated pending selection");
+            OpenAIClient.Response = (request, token) => Task.FromResult(answer);
+            f.Voice.SendChat("가까이 가져와서 손에 들어 줘.");
+            Check(f.Voice.IsAwaitingTarget, "valid typed clarification was ignored");
+            f.Voice.SendChat("빨간 상자."); f.Tick(8, 160);
+            Check(f.Stage.inventory.Contains("red_box"), "typed API clarification did not resume");
+        });
+        await Test("voice transcription and chat share the pending target", () => Sync(() =>
+        {
+            var f = new Fixture();
+            var blue = new GameObject().AddComponent<AgentInteractable>();
+            blue.id = "blue_box"; blue.displayName = "파란 상자";
+            blue.allowedVerbs.Add(AgentVocabulary.PickUp);
+            f.Voice.SendChat("상자 집어.");
+            OpenAIClient.Transcription = () => Task.FromResult("빨간색.");
+            f.Voice.StartVoiceInput();
+            f.Voice.StopVoiceInput();
+            f.Tick(8, 160);
+            Check(!f.Voice.IsAwaitingTarget && f.Stage.inventory.SequenceEqual(new[] { "red_box" }),
+                "voice follow-up discarded the chat pickup intent");
+        }));
         Console.WriteLine($"TOTAL: {_passed} passed, {_failed} failed, {_skipped} skipped. Unity Play Mode NOT executed.");
         return _failed == 0 ? 0 : 1;
     }
