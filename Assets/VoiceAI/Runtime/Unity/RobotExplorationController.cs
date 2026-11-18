@@ -41,6 +41,7 @@ namespace AgentEscape.VoiceAI
             _runner.CommandStarted += OnCommandStarted;
             _runner.CommandFinished += OnCommandFinished;
             _runner.AutonomySuppressionChanged += OnSuppressionChanged;
+            _runner.ExplorationCapabilityChanged += OnCapabilityChanged;
             Schedule();
             return true;
         }
@@ -48,8 +49,9 @@ namespace AgentEscape.VoiceAI
         private void Schedule()
         {
             _remaining = Mathf.Max(0f, idleDelaySeconds);
-            _scheduled = !_runner.AutonomySuppressed && !_runner.HasActiveCommand;
-            Status = _runner.AutonomySuppressed ? "명시적 중지 — 탐색 재개 필요" : "탐색 대기";
+            _scheduled = _runner.ExplorationEnabled && !_runner.AutonomySuppressed && !_runner.HasActiveCommand;
+            Status = !_runner.ExplorationEnabled ? "자율 탐색 기능 비활성" :
+                _runner.AutonomySuppressed ? "명시적 중지 — 탐색 재개 필요" : "탐색 대기";
         }
 
         private void OnCommandStarted(AgentCommandId id)
@@ -58,6 +60,8 @@ namespace AgentEscape.VoiceAI
             _remaining = Mathf.Max(0f, idleDelaySeconds);
             Status = _runner.CurrentSource == AgentCommandSource.Player ? "플레이어 명령 우선" : "자율 탐색 수행 중";
         }
+
+        private void OnCapabilityChanged(bool enabled) => Schedule();
 
         private void OnSuppressionChanged(bool suppressed)
         {
@@ -85,6 +89,7 @@ namespace AgentEscape.VoiceAI
         internal void Tick(float deltaTime)
         {
             if (!isActiveAndEnabled || !Connect() || deltaTime <= 0f) return;
+            if (!_runner.ExplorationEnabled) { Status = "자율 탐색 기능 비활성"; return; }
             if (_runner.AutonomySuppressed) { Status = "명시적 중지 — 탐색 재개 필요"; return; }
             if (_runner.HasActiveCommand || !_runner.isActiveAndEnabled || !_voice.isActiveAndEnabled ||
                 !body.isActiveAndEnabled || _voice.State != VoiceAgentState.Idle) return;
@@ -138,6 +143,7 @@ namespace AgentEscape.VoiceAI
                 _runner.CommandStarted -= OnCommandStarted;
                 _runner.CommandFinished -= OnCommandFinished;
                 _runner.AutonomySuppressionChanged -= OnSuppressionChanged;
+                _runner.ExplorationCapabilityChanged -= OnCapabilityChanged;
                 if (_inFlight && _runner.IsCurrent(_command)) _runner.Cancel("탐색 컴포넌트가 비활성화되었습니다.");
             }
             _runner = null;

@@ -116,6 +116,6 @@ namespace AgentEscape.VoiceAI
         public static bool IsImplemented(string verb) => verb == AgentVocabulary.MoveTo ||
             verb == AgentVocabulary.MoveDirection || verb == AgentVocabulary.Inspect ||
             verb == AgentVocabulary.PickUp || verb == AgentVocabulary.Drop ||
-            verb == AgentVocabulary.Wait || verb == AgentVocabulary.Stop;
+            verb == AgentVocabulary.Wait || verb == AgentVocabulary.Stop || verb == AgentVocabulary.Press;
     }
 }

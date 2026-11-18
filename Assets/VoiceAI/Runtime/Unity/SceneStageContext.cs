@@ -28,6 +28,32 @@ namespace AgentEscape.VoiceAI
             return target != null;
         }
 
+        internal string ResolveButton(string selector, out AgentInteractable target)
+        {
+            target = null;
+            GameObject match = null;
+            foreach (var candidate in GameObject.FindGameObjectsWithTag(AgentButton.Tag))
+            {
+                if (candidate.scene != gameObject.scene) continue;
+                candidate.TryGetComponent<AgentInteractable>(out var item);
+                candidate.TryGetComponent<AgentButton>(out var button);
+                if (!string.IsNullOrEmpty(selector) &&
+                    !AgentButton.Matches(candidate.name, selector) &&
+                    (item == null || (!AgentButton.Matches(item.id, selector) && !AgentButton.Matches(item.displayName, selector))) &&
+                    (button == null || !button.MatchesAlias(selector))) continue;
+
+                if (match != null) return "버튼이 여러 개입니다. 고유한 이름이나 번호를 입력해 주세요.";
+                match = candidate;
+            }
+            if (match == null) return "일치하는 버튼이 없습니다: " + selector;
+            if (!match.TryGetComponent<AgentInteractable>(out var selected) ||
+                !selected.isActiveAndEnabled || selected.Button == null || string.IsNullOrWhiteSpace(selected.id))
+                return "버튼 어댑터 또는 고유 ID가 설정되지 않았습니다: " + match.name;
+            if (!TryResolve(selected.id, out target) || target != selected)
+                return "버튼 ID가 중복되었습니다: " + selected.id;
+            return null;
+        }
+
         public StageContext Build()
         {
             var context = new StageContext

@@ -159,13 +159,29 @@ namespace AgentEscape.VoiceAI
         {
             if (AgentCommandRules.IsStop(text)) { RequestStop(); return true; }
             if (AgentCommandRules.IsResumeExploration(text)) { ResumeExploration(); return true; }
-            if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(text) || !EnsureApiReady()) return false;
+            if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(text)) return false;
+            if (AgentCommandRules.TryParseButtonCommand(text, out var verb, out var selector))
+            {
+                SubmitButtonCommand(BeginInput(), verb, selector);
+                return true;
+            }
+            if (!EnsureApiReady()) return false;
             var id = BeginInput();
             _ = RunTurnAsync(id, text, _request.Token);
             return true;
         }
 
         public void ReportEvent(string description) => _brain?.ReportEvent(description);
+
+        public void SetExplorationEnabled(bool enabled) => EnsureRunner().SetExplorationEnabled(enabled);
+
+        private void SubmitButtonCommand(AgentCommandId id, string verb, string selector)
+        {
+            if (!_runner.IsCurrent(id)) return;
+            string error = _stage.ResolveButton(selector, out var target);
+            _runner.Submit(id, error == null ? new[] { new AgentAction { Verb = verb, Target = target.id } }
+                : Array.Empty<AgentAction>(), error, target);
+        }
 
         public void ResumeExploration()
         {
@@ -202,6 +218,11 @@ namespace AgentEscape.VoiceAI
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(text)) { _runner.Fail(id, "음성 인식 결과가 없습니다."); return; }
+                if (AgentCommandRules.TryParseButtonCommand(text, out var verb, out var selector))
+                {
+                    SubmitButtonCommand(id, verb, selector);
+                    return;
+                }
                 await RunTurnAsync(id, text, token);
             }
             catch (OperationCanceledException) { }

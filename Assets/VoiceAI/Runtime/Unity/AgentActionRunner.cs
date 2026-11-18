@@ -14,9 +14,11 @@ namespace AgentEscape.VoiceAI
         public AgentCommandId CurrentCommand { get; private set; }
         public AgentCommandSource CurrentSource { get; private set; }
         public bool HasActiveCommand => _active;
+        public bool ExplorationEnabled { get; private set; }
         public bool AutonomySuppressed { get; private set; }
         public event Action<AgentCommandId> CommandStarted;
         public event Action<bool> AutonomySuppressionChanged;
+        public event Action<bool> ExplorationCapabilityChanged;
         public string PendingIntent { get; private set; } = "";
         public string LastResult { get; private set; } = "";
         public event Action<AgentExecutionState> ExecutionStateChanged;
@@ -34,6 +36,8 @@ namespace AgentEscape.VoiceAI
         private SceneStageContext _stage;
         private AgentBodyController _body;
         private float _autonomousRadius;
+        private AgentInteractable _expectedTarget;
+        private bool _hasExpectedTarget;
 
         internal void Initialize(VoiceAgent owner, SceneStageContext stage) { _owner = owner; _stage = stage; }
 
@@ -58,7 +62,7 @@ namespace AgentEscape.VoiceAI
         internal bool TryBeginAutonomous(float radius, out AgentCommandId id)
         {
             id = default;
-            if (_active || AutonomySuppressed || !isActiveAndEnabled || _owner == null ||
+            if (_active || !ExplorationEnabled || AutonomySuppressed || !isActiveAndEnabled || _owner == null ||
                 !_owner.isActiveAndEnabled || _owner.State != VoiceAgentState.Idle ||
                 _body == null || !_body.isActiveAndEnabled || radius <= 0f ||
                 float.IsNaN(radius) || float.IsInfinity(radius)) return false;
@@ -82,14 +86,19 @@ namespace AgentEscape.VoiceAI
             return id;
         }
 
-        internal void Submit(AgentCommandId id, IEnumerable<AgentAction> actions, string rejection)
+        internal void Submit(AgentCommandId id, IEnumerable<AgentAction> actions, string rejection,
+            AgentInteractable expectedTarget = null)
         {
             if (!IsCurrent(id) || State != AgentExecutionState.AwaitingInterpretation) return;
             if (rejection != null) { Finish(AgentExecutionOutcome.Rejected, rejection); return; }
+            _expectedTarget = expectedTarget;
+            _hasExpectedTarget = expectedTarget != null;
             _actions = actions.Select(AgentCommandRules.Copy).ToList();
             if (CurrentSource == AgentCommandSource.Autonomous && _actions.Any(a =>
                 a == null || (a.Verb != AgentVocabulary.MoveTo && a.Verb != AgentVocabulary.Inspect)))
             { Finish(AgentExecutionOutcome.Rejected, "자율 탐색은 이동·조사만 허용합니다."); return; }
+            if (!_hasExpectedTarget && _actions.Any(a => a?.Verb == AgentVocabulary.Press))
+            { Finish(AgentExecutionOutcome.Rejected, "버튼은 이름 또는 별칭과 함께 '버튼 눌러' 형식으로 지시해 주세요."); return; }
             if (_actions.Count > AgentResponseParser.MaxActionsPerTurn)
             { Finish(AgentExecutionOutcome.Rejected, "한 턴 행동 수 초과"); return; }
             if (_actions.Count == 0) { Finish(AgentExecutionOutcome.Completed, "실행할 행동이 없습니다."); return; }
@@ -136,6 +145,7 @@ namespace AgentEscape.VoiceAI
                 string validation = ValidateCurrent();
                 if (validation != null) { Finish(AgentExecutionOutcome.Rejected, validation); return; }
                 if (!_body.TickAction(deltaTime, _stage, out string message, out bool success)) return;
+                if (!IsCurrent(id)) return;
                 _body.CancelCurrentAction();
                 if (!IsCurrent(id)) return;
                 var result = Result(success ? AgentExecutionOutcome.Completed : AgentExecutionOutcome.Failed, message);
@@ -160,6 +170,9 @@ namespace AgentEscape.VoiceAI
             if (error != null) return error;
             if (action.Target != null && !_stage.TryResolve(action.Target, out _))
                 return "실제 대상이 없거나 ID가 중복되었습니다: " + action.Target;
+            if (_hasExpectedTarget && (_expectedTarget == null ||
+                !_stage.TryResolve(action.Target, out var expected) || expected != _expectedTarget || expected.Button == null))
+                return "선택한 버튼이 변경되었거나 비활성화되었습니다.";
             if (CurrentSource == AgentCommandSource.Autonomous)
             {
                 if (action.Verb != AgentVocabulary.MoveTo && action.Verb != AgentVocabulary.Inspect)
@@ -181,6 +194,7 @@ namespace AgentEscape.VoiceAI
             {
                 case AgentVocabulary.MoveTo: return target + " 앞으로 이동하겠습니다.";
                 case AgentVocabulary.Inspect: return target + "을(를) 살펴보겠습니다.";
+                case AgentVocabulary.Press: return target + "을(를) 누르겠습니다.";
                 case AgentVocabulary.PickUp: return target + "을(를) 집겠습니다.";
                 case AgentVocabulary.Drop: return target + "을(를) 내려놓겠습니다.";
                 case AgentVocabulary.MoveDirection:
@@ -203,6 +217,15 @@ namespace AgentEscape.VoiceAI
             Cancel("멈췄습니다. 자동 탐색은 명시적으로 재개해야 합니다.");
         }
 
+        public void SetExplorationEnabled(bool enabled)
+        {
+            if (ExplorationEnabled == enabled) return;
+            ExplorationEnabled = enabled;
+            if (!enabled && _active && CurrentSource == AgentCommandSource.Autonomous)
+                Cancel("자율 탐색 기능이 비활성화되었습니다.");
+            AgentEventDispatch.Invoke(ExplorationCapabilityChanged, enabled);
+        }
+
         public void ResumeExploration()
         {
             AutonomySuppressed = false;
@@ -220,6 +243,8 @@ namespace AgentEscape.VoiceAI
             if (!_active) return;
             var result = Result(outcome, message);
             _active = false;
+            _expectedTarget = null;
+            _hasExpectedTarget = false;
             _actions = null;
             PendingIntent = "";
             LastResult = message;

@@ -35,7 +35,7 @@ internal static class BehaviorTests
         public AgentActionRunner Runner => Voice.Runner;
         public readonly List<AgentExecutionResult> Endings = new List<AgentExecutionResult>();
         public readonly List<AgentExecutionResult> Actions = new List<AgentExecutionResult>();
-        public Fixture()
+        public Fixture(bool apiAvailable = true)
         {
             UnityEngine.Object.ResetWorld();
             OpenAIClient.Response = (r, t) => Task.FromResult(Reply(0, Move()));
@@ -43,7 +43,9 @@ internal static class BehaviorTests
             var host = new GameObject();
             Stage = host.AddComponent<SceneStageContext>();
             Stage.useDemoObjectsWhenEmpty = false;
-            Voice = host.AddComponent<VoiceAgent>();
+            OpenAIKeyProvider.Available = apiAvailable;
+            try { Voice = host.AddComponent<VoiceAgent>(); }
+            finally { OpenAIKeyProvider.Available = true; }
             Body = new GameObject().AddComponent<AgentBodyController>();
             Box = new GameObject().AddComponent<AgentInteractable>();
             Box.id = "red_box"; Box.displayName = "빨간 상자"; Box.allowedVerbs.AddRange(new[] { "pick_up", "drop" });
@@ -66,9 +68,10 @@ internal static class BehaviorTests
             UnityEngine.Object.Call(bridge, "OnEnable");
             return bridge;
         }
-        public RobotExplorationController AttachExplorer()
+        public RobotExplorationController AttachExplorer(bool enableCapability = true)
         {
             Box.allowAutonomousExploration = true;
+            if (enableCapability) Voice.SetExplorationEnabled(true);
             return Body.gameObject.AddComponent<RobotExplorationController>();
         }
         public void Explore(RobotExplorationController explorer, float seconds, int frames = 1)
@@ -79,6 +82,26 @@ internal static class BehaviorTests
                 explorer.Tick(seconds / frames);
             }
         }
+    }
+
+    private sealed class ButtonReceiver : MonoBehaviour, IAgentButtonReceiver
+    {
+        public int PressCount;
+        public void Press() => PressCount++;
+        public bool TryPress() { Press(); return true; }
+    }
+
+    private static AgentButton CreateButton(string id, string displayName, Vector3 approach, params string[] aliases)
+    {
+        var obj = new GameObject { tag = AgentButton.Tag, name = id + "_object" };
+        var item = obj.AddComponent<AgentInteractable>();
+        item.id = id;
+        item.displayName = displayName;
+        var button = obj.AddComponent<AgentButton>();
+        button.approachPoint = new GameObject().transform;
+        button.approachPoint.position = approach;
+        button.aliases.AddRange(aliases);
+        return button;
     }
 
     private static async Task Test(string name, Func<Task> run)
@@ -146,7 +169,7 @@ internal static class BehaviorTests
         }));
         await Test("unimplemented verb rejected", () => Sync(() =>
         {
-            var f = new Fixture(); f.Box.allowedVerbs.Add("press"); f.Submit(new AgentAction { Verb = "press", Target = "red_box" });
+            var f = new Fixture(); f.Box.allowedVerbs.Add("open"); f.Submit(new AgentAction { Verb = "open", Target = "red_box" });
             Check(f.Endings.Single().Outcome == AgentExecutionOutcome.Rejected, "unsupported accepted");
         }));
         await Test("local stop makes no API call", () => Sync(() =>
@@ -263,17 +286,22 @@ internal static class BehaviorTests
             f.Body.enabled = false; f.Body.enabled = true; f.Tick(5);
             Check(f.Body.transform.position.z == position && f.Endings.Single().Outcome == AgentExecutionOutcome.Cancelled, "body resumed");
         }));
-        await Test("Kyle controller asset matches exact parameters and blend thresholds", () => Sync(() =>
+        const string controllerPath = "Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller";
+        if (!System.IO.File.Exists(controllerPath))
+            Console.WriteLine("SKIP Kyle controller asset is unavailable in this checkout");
+        else
         {
-            string path = "Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller";
-            string controller = System.IO.File.ReadAllText(path);
-            foreach (string parameter in new[] { "Speed", "MotionSpeed" })
-                Check(System.Text.RegularExpressions.Regex.IsMatch(controller, "m_Name: " + parameter + @"\r?\n\s+m_Type: 1"), "float parameter mismatch");
-            foreach (string parameter in new[] { "Grounded", "Jump", "FreeFall" })
-                Check(System.Text.RegularExpressions.Regex.IsMatch(controller, "m_Name: " + parameter + @"\r?\n\s+m_Type: 4"), "bool parameter mismatch");
-            Check(controller.Contains("m_Name: Idle Walk Run Blend") && controller.Contains("m_SpeedParameter: MotionSpeed"), "state multiplier mismatch");
-            foreach (string threshold in new[] { "0", "2", "6" }) Check(controller.Contains("m_Threshold: " + threshold), "blend threshold mismatch");
-        }));
+            await Test("Kyle controller asset matches exact parameters and blend thresholds", () => Sync(() =>
+            {
+                string controller = System.IO.File.ReadAllText(controllerPath);
+                foreach (string parameter in new[] { "Speed", "MotionSpeed" })
+                    Check(System.Text.RegularExpressions.Regex.IsMatch(controller, "m_Name: " + parameter + @"\r?\n\s+m_Type: 1"), "float parameter mismatch");
+                foreach (string parameter in new[] { "Grounded", "Jump", "FreeFall" })
+                    Check(System.Text.RegularExpressions.Regex.IsMatch(controller, "m_Name: " + parameter + @"\r?\n\s+m_Type: 4"), "bool parameter mismatch");
+                Check(controller.Contains("m_Name: Idle Walk Run Blend") && controller.Contains("m_SpeedParameter: MotionSpeed"), "state multiplier mismatch");
+                foreach (string threshold in new[] { "0", "2", "6" }) Check(controller.Contains("m_Threshold: " + threshold), "blend threshold mismatch");
+            }));
+        }
         await Test("animator idle and intent wait have zero locomotion", () => Sync(() =>
         {
             var f = new Fixture(); f.AttachAnimator(out var animator);
@@ -440,6 +468,7 @@ internal static class BehaviorTests
             foreach (string verb in new[] { "pick_up", "drop", "open", "close", "press", "use", "push", "pull", "stop", "move_direction" })
             {
                 var f = new Fixture(); f.Box.allowAutonomousExploration = true;
+                f.Voice.SetExplorationEnabled(true);
                 Check(f.Runner.TryBeginAutonomous(10, out var id), "autonomous start failed");
                 f.Runner.Submit(id, new[] { new AgentAction { Verb = verb, Target = f.Box.id } }, null);
                 Check(f.Endings.Single().Outcome == AgentExecutionOutcome.Rejected && f.Stage.inventory.Count == 0, "autonomous mutation allowed: " + verb);
@@ -485,6 +514,102 @@ internal static class BehaviorTests
             typeof(RobotExplorationController).GetMethod("OnCommandFinished", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
                 .Invoke(e, new object[] { new AgentExecutionResult { CommandId = old, Source = AgentCommandSource.Autonomous, Outcome = AgentExecutionOutcome.Completed } });
             e.Tick(10); Check(f.Runner.IsCurrent(current) && !f.Box.HasBeenInspected, "stale completion altered current work");
+        }));
+        await Test("offline capability defaults off and can be explicitly enabled", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var explorer = f.AttachExplorer(enableCapability: false);
+            f.Voice.SendChat("탐색 재개");
+            f.Explore(explorer, 10, 200);
+            Check(!f.Voice.ApiReady && !f.Runner.HasActiveCommand && !f.Box.HasBeenInspected &&
+                f.Body.transform.position.sqrMagnitude == 0, "exploration started without capability");
+            f.Voice.SetExplorationEnabled(true);
+            f.Explore(explorer, 10, 200);
+            Check(f.Box.HasBeenInspected, "enabled exploration did not inspect");
+        }));
+        await Test("offline button aliases, separate approach, exactly one event", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 4), "1번", "문 옆에 있는");
+            var redReceiver = red.gameObject.AddComponent<ButtonReceiver>();
+            red.onPress.SetTestPersistentListener(redReceiver.Press);
+            var blue = CreateButton("blue_button", "파란 버튼", new Vector3(4, 0, 0), "2번");
+            var blueReceiver = blue.gameObject.AddComponent<ButtonReceiver>();
+            blue.receiver = blueReceiver;
+
+            f.Voice.SendChat("저 버튼 눌러");
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "ambiguous command accepted");
+            f.Voice.SendChat("없는 버튼 눌러");
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "missing button accepted");
+            f.Voice.SendChat("1번 버튼 앞까지 가"); f.Tick(5, 100);
+            Check(f.Body.transform.position.z == 4 && redReceiver.PressCount == 0 &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Completed, "approach pressed or failed");
+            f.Voice.SendChat("문 옆에 있는 버튼 눌러"); f.Tick(10, 200);
+            Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 0 &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Completed && !f.Voice.ApiReady, "wrong press");
+            f.Voice.SendChat("2번 버튼을 눌러"); f.Tick(10, 200);
+            Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 1, "wrong numbered button");
+        }));
+        await Test("button without listener fails and a moving press can be cancelled", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 5));
+            f.Voice.SendChat("빨간 버튼 눌러"); f.Tick(3, 60);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Failed &&
+                f.Body.transform.position.sqrMagnitude == 0, "disconnected button reported success");
+            var listener = red.gameObject.AddComponent<ButtonReceiver>();
+            red.receiver = listener;
+            var explorer = f.AttachExplorer();
+            explorer.Tick(3);
+            Check(f.Runner.CurrentSource == AgentCommandSource.Autonomous, "missing autonomous work");
+            f.Voice.SendChat("빨간 버튼 눌러"); f.Tick(1.5f, 30);
+            Check(f.Runner.CurrentSource == AgentCommandSource.Player && f.Body.IsMoving, "player failed to preempt");
+            f.Voice.SetExplorationEnabled(false);
+            Check(f.Body.IsMoving, "capability disable cancelled player work");
+            f.Voice.SendChat("멈춰"); f.Explore(explorer, 10, 200);
+            Check(listener.PressCount == 0 && !f.Body.IsMoving && !f.Runner.HasActiveCommand &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Cancelled, "cancelled press fired");
+        }));
+        await Test("moved approach point and replaced target never activate", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var button = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 5));
+            var listener = button.gameObject.AddComponent<ButtonReceiver>(); button.receiver = listener;
+            f.Voice.SendChat("빨간 버튼 눌러"); f.Tick(1.1f, 11);
+            button.approachPoint.position = new Vector3(0, 0, 9);
+            f.Tick(10, 200);
+            Check(listener.PressCount == 0 && f.Endings.Last().Outcome == AgentExecutionOutcome.Failed, "out of range press");
+            f.Voice.SendChat("빨간 버튼 눌러");
+            button.GetComponent<AgentInteractable>().enabled = false;
+            var replacement = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 5));
+            var replacementListener = replacement.gameObject.AddComponent<ButtonReceiver>(); replacement.receiver = replacementListener;
+            f.Tick(10, 200);
+            Check(replacementListener.PressCount == 0 && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "stale target replacement");
+        }));
+        await Test("voice transcript shares local button routing without LLM", () => Sync(() =>
+        {
+            var f = new Fixture();
+            var button = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 2));
+            var listener = button.gameObject.AddComponent<ButtonReceiver>();
+            button.receiver = listener;
+            int llmCalls = 0;
+            OpenAIClient.Response = (r, t) => { llmCalls++; return Task.FromResult(Reply()); };
+            OpenAIClient.Transcription = () => Task.FromResult("저 버튼 눌러");
+            f.Voice.StartVoiceInput(); f.Voice.StopVoiceInput();
+            f.Tick(5, 100);
+            Check(listener.PressCount == 1 && llmCalls == 0, "voice bypassed local routing");
+        }));
+        await Test("free-form API output cannot pick and press a button", () => Sync(() =>
+        {
+            var f = new Fixture();
+            var button = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 2));
+            var listener = button.gameObject.AddComponent<ButtonReceiver>();
+            button.receiver = listener;
+            OpenAIClient.Response = (r, t) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.Press, Target = "red_button" }));
+            f.Voice.SendChat("아무거나 해");
+            f.Tick(5, 100);
+            Check(listener.PressCount == 0 && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "API pressed without explicit command");
         }));
         Console.WriteLine("TOTAL: " + _passed + " passed; Unity Play Mode NOT executed.");
     }

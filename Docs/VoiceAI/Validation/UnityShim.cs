@@ -29,6 +29,8 @@ namespace UnityEngine
         public GameObject gameObject;
         public Transform transform => gameObject.transform;
         public T GetComponent<T>() where T : Component => gameObject.GetComponent<T>();
+        public bool TryGetComponent<T>(out T component) where T : Component => gameObject.TryGetComponent(out component);
+        public bool CompareTag(string tag) => gameObject.tag == tag;
     }
     public class Behaviour : Component
     {
@@ -45,6 +47,14 @@ namespace UnityEngine
     {
         private readonly List<Component> _components = new List<Component>();
         public int scene = 1;
+        public string tag = "Untagged";
+        public static GameObject[] FindGameObjectsWithTag(string tag) =>
+            Components.Select(c => c.gameObject).Distinct().Where(g => g.tag == tag).ToArray();
+        public bool TryGetComponent<T>(out T component) where T : Component
+        {
+            component = GetComponent<T>();
+            return component != null;
+        }
         public readonly Transform transform = new Transform();
         public T AddComponent<T>() where T : Component, new()
         {
@@ -70,6 +80,7 @@ namespace UnityEngine
     {
         public float x, y, z;
         public Vector3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
+        public static float Distance(Vector3 first, Vector3 second) => (first - second).magnitude;
         public static Vector3 up => new Vector3(0, 1, 0);
         public float sqrMagnitude => x * x + y * y + z * z;
         public float magnitude => (float)Math.Sqrt(sqrMagnitude);
@@ -141,10 +152,34 @@ namespace UnityEngine
     [AttributeUsage(AttributeTargets.Field)] public class TextArea : Attribute { public TextArea(int min = 0, int max = 0) { } }
 }
 
+namespace UnityEngine.Events
+{
+    public enum UnityEventCallState { Off, EditorAndRuntime, RuntimeOnly }
+    public class UnityEventBase
+    {
+        public static MethodInfo GetValidMethodInfo(object target, string name, Type[] types) =>
+            target.GetType().GetMethod(name, types);
+    }
+    public class UnityEvent : UnityEventBase
+    {
+        private Action _listener;
+        public void SetTestPersistentListener(Action listener) => _listener = listener;
+        public int GetPersistentEventCount() => _listener == null ? 0 : 1;
+        public Object GetPersistentTarget(int index) => (Object)_listener.Target;
+        public UnityEventCallState GetPersistentListenerState(int index) => UnityEventCallState.RuntimeOnly;
+        public string GetPersistentMethodName(int index) => _listener.Method.Name;
+        public void Invoke() => _listener?.Invoke();
+    }
+}
+
 namespace AgentEscape.VoiceAI
 {
     // 실제 키 파일·마이크·네트워크에는 접근하지 않는다.
-    public static class OpenAIKeyProvider { public static string Load() => "unused-test-placeholder"; }
+    public static class OpenAIKeyProvider
+    {
+        public static bool Available = true;
+        public static string Load() => Available ? "unused-test-placeholder" : throw new InvalidOperationException("No test API key");
+    }
     public sealed class RecordedAudio { public byte[] Wav; public float Seconds; public float Rms; }
     public sealed class MicrophoneRecorder
     {

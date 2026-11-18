@@ -21,6 +21,7 @@ namespace AgentEscape.VoiceAI
         private AgentAction _action;
         private AgentInteractable _target;
         private Vector3 _destination;
+        private AgentButton _button;
         private bool _moving;
         private float _remainingWait;
         private float _elapsed;
@@ -55,6 +56,7 @@ namespace AgentEscape.VoiceAI
         {
             _action = null;
             _target = null;
+            _button = null;
             _moving = false;
             AgentEventDispatch.Invoke(MotionUpdated, 0f);
         }
@@ -77,6 +79,21 @@ namespace AgentEscape.VoiceAI
             }
             if (!stage.TryResolve(action.Target, out _target)) return "대상이 없거나 ID가 중복되었습니다: " + action.Target;
             if (action.Verb == AgentVocabulary.Drop) return null;
+            _button = _target.Button;
+            if (action.Verb == AgentVocabulary.Press)
+            {
+                if (_button == null) return "AIButton 어댑터가 연결되지 않았습니다: " + _target.name;
+                string error = _button.ConfigurationError();
+                if (error != null) { Debug.LogWarning("[VoiceAI] " + error, _button); return error; }
+            }
+            if (_button != null && _button.approachPoint != null &&
+                (action.Verb == AgentVocabulary.MoveTo || action.Verb == AgentVocabulary.Press))
+            {
+                _destination = _button.approachPoint.position;
+                _destination.y = transform.position.y;
+                _moving = (_destination - transform.position).sqrMagnitude > 0.0001f;
+                return _moving ? MovementError() : null;
+            }
             Vector3 offset = _target.transform.position - transform.position;
             offset.y = 0f;
             float distance = Mathf.Max(0.05f, stopDistance);
@@ -120,7 +137,14 @@ namespace AgentEscape.VoiceAI
                 // 조작은 다음 프레임에 수행하여 접근 직후 최신 검증을 한 번 더 거친다.
                 return false;
             }
-            if (_target != null && _action.Verb != AgentVocabulary.Drop)
+            if (_action.Verb == AgentVocabulary.Press ||
+                (_action.Verb == AgentVocabulary.MoveTo && _button != null && _button.approachPoint != null))
+            {
+                if (_button == null || _target.Button != _button || _button.approachPoint == null ||
+                    Vector3.Distance(transform.position, _button.approachPoint.position) > _button.interactionDistance)
+                { message = "버튼 접근 지점의 조작 거리 안에 도착하지 못했습니다."; return true; }
+            }
+            else if (_target != null && _action.Verb != AgentVocabulary.Drop)
             {
                 Vector3 offset = _target.transform.position - transform.position;
                 offset.y = 0f;
@@ -141,6 +165,12 @@ namespace AgentEscape.VoiceAI
                     stage.agentLocation = _target.displayName + " 앞";
                     _target.MarkInspected();
                     message = _target.displayName + ": " + _target.description;
+                    break;
+                case AgentVocabulary.Press:
+                    string buttonName = _target.displayName;
+                    message = _button.TryPress();
+                    if (message != null) { Debug.LogWarning("[VoiceAI] " + message, this); return true; }
+                    message = buttonName + " 버튼 이벤트를 실행했습니다.";
                     break;
                 case AgentVocabulary.PickUp:
                     if (_target.transform == transform || transform.IsChildOf(_target.transform))

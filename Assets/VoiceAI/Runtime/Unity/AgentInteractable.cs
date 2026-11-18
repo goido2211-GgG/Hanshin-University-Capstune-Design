@@ -33,15 +33,20 @@ namespace AgentEscape.VoiceAI
         private void OnEnable() { if (!ActiveItems.Contains(this)) ActiveItems.Add(this); }
         private void OnDisable() { ActiveItems.Remove(this); }
 
+        internal AgentButton Button => CompareTag(AgentButton.Tag) &&
+            TryGetComponent<AgentButton>(out var button) && button.isActiveAndEnabled ? button : null;
+
         public StageObject ToStageObject()
         {
+            var verbs = new List<string>(allowedVerbs);
+            if (Button != null && !verbs.Contains(AgentVocabulary.Press)) verbs.Add(AgentVocabulary.Press);
             return new StageObject
             {
                 Id = id,
                 DisplayName = displayName,
                 Description = description,
                 State = state,
-                AllowedVerbs = new List<string>(allowedVerbs),
+                AllowedVerbs = verbs,
                 MinTrust = minTrust
             };
         }

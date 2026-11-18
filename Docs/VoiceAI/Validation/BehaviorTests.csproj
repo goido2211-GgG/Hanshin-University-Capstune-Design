@@ -16,8 +16,10 @@
     <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/AgentInteractable.cs" />
     <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/SceneStageContext.cs" />
     <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/VoiceAgent.cs" />
+    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/AgentButton.cs" />
     <Compile Include="UnityShim.cs" />
     <Compile Include="BehaviorTests.cs" />
-    <Reference Include="../../../Library/PackageCache/com.unity.nuget.newtonsoft-json*/Runtime/Newtonsoft.Json.dll" />
+    <Reference Include="../../../Library/PackageCache/com.unity.nuget.newtonsoft-json*/Runtime/Newtonsoft.Json.dll" Condition="'$(NewtonsoftJsonPath)' == ''" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(NewtonsoftJsonPath)" Condition="'$(NewtonsoftJsonPath)' != ''" />
   </ItemGroup>
 </Project>

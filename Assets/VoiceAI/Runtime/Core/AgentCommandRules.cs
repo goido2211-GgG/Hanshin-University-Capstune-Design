@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 
 namespace AgentEscape.VoiceAI
 {
@@ -21,6 +22,18 @@ namespace AgentEscape.VoiceAI
                     return true;
                 default: return false;
             }
+        }
+
+        private static readonly Regex ButtonCommand = new Regex(
+            @"^(?<selector>.*?)\s*버튼(?:을|를)?\s*(?:(?<press>눌러)(?:\s*줘|주세요)?|앞(?:까지|으로)?\s*가(?:\s*줘|세요)?)$");
+
+        public static bool TryParseButtonCommand(string text, out string verb, out string selector)
+        {
+            var match = ButtonCommand.Match((text ?? "").Trim().TrimEnd('.', '!', '?', '。', '！', '？').Trim());
+            verb = match.Success ? (match.Groups["press"].Success ? AgentVocabulary.Press : AgentVocabulary.MoveTo) : null;
+            selector = match.Success ? match.Groups["selector"].Value.Trim() : null;
+            if (selector == "저" || selector == "그" || selector == "이") selector = "";
+            return match.Success;
         }
 
         public static AgentAction Copy(AgentAction action) => action == null ? null : new AgentAction

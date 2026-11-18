@@ -1,5 +1,11 @@
 # 1차 리팩터링 검증 도구
 
+## 맵 버튼 검증
+
+버튼 동작 시험은 가짜 키 로더와 UnityShim을 사용한다. Kyle Controller 파일이 없는 체크아웃에서는 해당 에셋 계약 사례만 `SKIP`으로 표시하며 나머지 시험은 실행한다.
+
+`UnityCompile`은 VoiceAI 런타임과 `Assets/Scripts`를 함께 컴파일한다. 새 Clone에 참조 캐시가 없을 때 명시적으로 제공할 수 있는 속성은 `-p:NewtonsoftJsonPath=<Newtonsoft.Json.dll 경로>`와 `-p:UnityPackageAssemblies=<Unity 패키지 DLL 폴더>`다. `BehaviorTests`에도 NewtonsoftJsonPath를 사용할 수 있다.
+
 ## 2026-11-11 통합 입력 참조 빌드
 
 새 VoiceAIIntegrationInput이 팀원 ControlModeSwitcher / PlayerController / DroneController를 참조하므로 UnityCompile에 이 소스 3개와 실제 Library/ScriptAssemblies/Unity.InputSystem.dll 참조를 추가했다. Unity에서 프로젝트 Import·컴파일을 먼저 수행해야 한다. 런타임 참조 빌드가 실제 씬·입력·IME 시험을 대신하지 않는다.
