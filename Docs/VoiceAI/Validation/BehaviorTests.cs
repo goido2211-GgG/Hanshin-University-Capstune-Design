@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +12,8 @@ using UnityEngine;
 internal static class BehaviorTests
 {
     private static int _passed;
+    private static int _failed;
+    private static int _skipped;
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static AgentAction Move(int steps = 5) => new AgentAction { Verb = "move_direction", Direction = "forward", Steps = steps };
     private static JObject Reply(int delta = 0, params AgentAction[] actions) => new JObject
@@ -105,10 +108,34 @@ internal static class BehaviorTests
     }
 
     private static async Task Test(string name, Func<Task> run)
-    { await run(); ++_passed; Console.WriteLine("PASS " + name); }
+    {
+        try
+        {
+            await run();
+            ++_passed;
+            Console.WriteLine("PASS " + name);
+        }
+        catch (Exception error)
+        {
+            ++_failed;
+            Console.Error.WriteLine($"FAIL {name}{Environment.NewLine}{error}");
+        }
+    }
+
     private static Task Sync(Action run) { run(); return Task.CompletedTask; }
 
-    public static async Task Main()
+    private static string FindProjectRoot(string start)
+    {
+        for (var directory = new DirectoryInfo(start); directory != null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "ProjectSettings", "ProjectVersion.txt")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "Assets", "VoiceAI")))
+                return directory.FullName;
+        }
+        return null;
+    }
+
+    public static async Task<int> Main()
     {
         await Test("intent uses real target; one second delay", () => Sync(() =>
         {
@@ -286,14 +313,19 @@ internal static class BehaviorTests
             f.Body.enabled = false; f.Body.enabled = true; f.Tick(5);
             Check(f.Body.transform.position.z == position && f.Endings.Single().Outcome == AgentExecutionOutcome.Cancelled, "body resumed");
         }));
-        const string controllerPath = "Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller";
-        if (!System.IO.File.Exists(controllerPath))
-            Console.WriteLine("SKIP Kyle controller asset is unavailable in this checkout");
+        const string controllerAsset = "Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller";
+        string projectRoot = FindProjectRoot(AppContext.BaseDirectory) ?? FindProjectRoot(Directory.GetCurrentDirectory());
+        string controllerPath = projectRoot == null ? null : Path.Combine(projectRoot, controllerAsset);
+        if (!File.Exists(controllerPath))
+        {
+            ++_skipped;
+            Console.WriteLine("SKIP Kyle controller asset is unavailable: " + (controllerPath ?? controllerAsset));
+        }
         else
         {
             await Test("Kyle controller asset matches exact parameters and blend thresholds", () => Sync(() =>
             {
-                string controller = System.IO.File.ReadAllText(controllerPath);
+                string controller = File.ReadAllText(controllerPath);
                 foreach (string parameter in new[] { "Speed", "MotionSpeed" })
                     Check(System.Text.RegularExpressions.Regex.IsMatch(controller, "m_Name: " + parameter + @"\r?\n\s+m_Type: 1"), "float parameter mismatch");
                 foreach (string parameter in new[] { "Grounded", "Jump", "FreeFall" })
@@ -611,6 +643,7 @@ internal static class BehaviorTests
             f.Tick(5, 100);
             Check(listener.PressCount == 0 && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "API pressed without explicit command");
         }));
-        Console.WriteLine("TOTAL: " + _passed + " passed; Unity Play Mode NOT executed.");
+        Console.WriteLine($"TOTAL: {_passed} passed, {_failed} failed, {_skipped} skipped. Unity Play Mode NOT executed.");
+        return _failed == 0 ? 0 : 1;
     }
 }

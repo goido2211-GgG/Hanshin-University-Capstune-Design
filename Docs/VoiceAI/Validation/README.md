@@ -2,7 +2,7 @@
 
 ## 맵 버튼 검증
 
-버튼 동작 시험은 가짜 키 로더와 UnityShim을 사용한다. Kyle Controller 파일이 없는 체크아웃에서는 해당 에셋 계약 사례만 `SKIP`으로 표시하며 나머지 시험은 실행한다.
+버튼 동작 시험은 가짜 키 로더와 UnityShim을 사용한다. 테스트 실행 파일의 위치에서 Unity 프로젝트 루트를 찾고, 필요하면 현재 디렉터리에서 다시 찾는다. Kyle Controller 파일이 없으면 해당 에셋 계약 사례를 `SKIP`으로 집계한다. 테스트 실패는 이름과 예외 스택을 `FAIL`로 출력하며, 나머지 테스트를 실행한 뒤 종료 코드 1을 반환한다.
 
 `UnityCompile`은 VoiceAI 런타임과 `Assets/Scripts`를 함께 컴파일한다. 새 Clone에 참조 캐시가 없을 때 명시적으로 제공할 수 있는 속성은 `-p:NewtonsoftJsonPath=<Newtonsoft.Json.dll 경로>`와 `-p:UnityPackageAssemblies=<Unity 패키지 DLL 폴더>`다. `BehaviorTests`에도 NewtonsoftJsonPath를 사용할 수 있다.
 
@@ -23,10 +23,11 @@ $env:DOTNET_CLI_HOME = Join-Path (Get-Location) 'Docs/VoiceAI/Validation/.cli'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 dotnet build Docs/VoiceAI/Validation/UnityCompile.csproj --configfile Docs/VoiceAI/Validation/NuGet.Config --nologo
-dotnet run --project Docs/VoiceAI/Validation/BehaviorTests.csproj --configfile Docs/VoiceAI/Validation/NuGet.Config
+dotnet build Docs/VoiceAI/Validation/BehaviorTests.csproj --configfile Docs/VoiceAI/Validation/NuGet.Config --nologo
+if ($LASTEXITCODE -eq 0) { & ./Docs/VoiceAI/Validation/bin/Debug/net10.0/BehaviorTests.exe }
 ```
 
-Unity 설치 경로가 다르면 빌드에 `-p:UnityEditorRoot="설치한 Editor 경로"`를 추가한다. 프로젝트의 로컬 Newtonsoft.Json 캐시가 없으면 이 도구는 참조를 찾지 못한다. 네트워크 패키지 원본은 NuGet.Config에서 비활성화했다. 이 도구가 프로젝트 패키지를 설치하거나 설정을 수정하지 않는다.
+Unity 설치 경로가 다르면 참조 빌드에 `-p:UnityEditorRoot="설치한 Editor 경로"`를 추가한다. 프로젝트의 로컬 Newtonsoft.Json 캐시가 없는 경우 `dotnet build` 명령에 `-p:NewtonsoftJsonPath="기존 Newtonsoft.Json.dll의 절대 경로"`를 추가한다. 네트워크 패키지 원본은 NuGet.Config에서 비활성화했다. 이 도구가 프로젝트 패키지를 설치하거나 설정을 수정하지 않는다.
 
 ## 검증 범위
 
@@ -38,7 +39,7 @@ Unity 설치 경로가 다르면 빌드에 `-p:UnityEditorRoot="설치한 Editor
 
 - 전체 런타임 참조 빌드: 오류 0, 경고 0.
 - 동작 시험: 기존 실행/취소 25개 + 걷기 연결 10개 + 반자율 탐색 17개 = 총 52개 통과. Controller 파라미터/임계값, Idle/Walk·정지·방향·집기 회귀와 탐색 3초·대상 필터·거리/ID·반복 방지·플레이어 선점·지속 중지·로컬 재개·실제 대상 재검증·출처 화이트리스트·이전 결과 무시를 검사한다.
-- 에셋 계약 사례는 프로젝트 루트에서 실행하고 Import된 `Assets/Starter Assets/.../StarterAssetsThirdPerson.controller`를 읽는다. 해당 에셋이 없으면 실패하며 가짜 Controller로 조용히 대체하지 않는다.
+- 에셋 계약 사례는 Import된 `Assets/Starter Assets/.../StarterAssetsThirdPerson.controller`를 읽는다. 검사 결과는 파일이 있는 체크아웃에서 확인할 수 있다.
 - 이번 탐색 변경의 Unity Editor 컴파일 / Play Mode / 실제 API / 실제 마이크 / IMGUI: Codex 미실행. 이전 사용자 U01~U06 및 걷기·완료 Idle U07/U08은 TEST_PLAN의 별도 출처 기록이다. Bridge 연결 이후 Esc는 아직 사용자 성공 보고가 없다.
 - 실패한 자동 시험: 최종 실행에서 없음.
 
