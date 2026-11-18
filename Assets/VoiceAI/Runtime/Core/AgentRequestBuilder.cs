@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using Newtonsoft.Json.Linq;
@@ -21,6 +22,8 @@ namespace AgentEscape.VoiceAI
     /// <summary>OpenAI Responses API 요청 본문을 만든다.</summary>
     public static class AgentRequestBuilder
     {
+        private const int MaxSceneObjects = 40;
+
         public static JObject Build(
             string systemPrompt,
             IEnumerable<ChatTurn> history,
@@ -41,14 +44,13 @@ namespace AgentEscape.VoiceAI
             input.Add(Message("developer", BuildStateMessage(context, trust, recentEvents, directive)));
             input.Add(Message("user", playerText));
 
-            return new JObject
+            var request = new JObject
             {
                 ["model"] = settings.Model,
                 ["instructions"] = systemPrompt,
                 ["input"] = input,
                 ["store"] = false,
                 ["max_output_tokens"] = settings.MaxOutputTokens,
-                ["reasoning"] = new JObject { ["effort"] = settings.ReasoningEffort },
                 ["text"] = new JObject
                 {
                     ["format"] = new JObject
@@ -60,6 +62,9 @@ namespace AgentEscape.VoiceAI
                     }
                 }
             };
+            if (!string.IsNullOrWhiteSpace(settings.ReasoningEffort))
+                request["reasoning"] = new JObject { ["effort"] = settings.ReasoningEffort.Trim() };
+            return request;
         }
 
         public static string BuildStateMessage(
@@ -67,19 +72,36 @@ namespace AgentEscape.VoiceAI
         {
             var text = new StringBuilder();
             text.AppendLine("[현재 게임 상태]");
-            text.AppendLine("상황: " + context.Brief);
-            text.AppendLine("요원 위치: " + context.AgentLocation);
+            text.AppendLine("상황: " + Limit(context.Brief, 200));
+            text.AppendLine("요원 위치: " + Limit(context.AgentLocation) + Position(context.AgentPositionX, context.AgentPositionY, context.AgentPositionZ));
+            if (context.AgentHeading.HasValue) text.AppendLine("요원 월드 Y축 방향(도): " + Format(context.AgentHeading.Value));
             text.AppendLine("신뢰도: " + trust + "/100");
             text.AppendLine("가진 물건: " + (context.Inventory.Count == 0 ? "없음" : string.Join(", ", context.Inventory)));
+            if (!string.IsNullOrEmpty(context.SelectedTargetId))
+                text.AppendLine("직전에 선택한 대상 ID: " + Limit(context.SelectedTargetId));
+            if (context.LastAction != null)
+                text.AppendLine("마지막 행동: " + context.LastAction +
+                    (context.LastActionSucceeded.HasValue ? (context.LastActionSucceeded.Value ? " / 성공" : " / 실패") : ""));
+            if (context.CurrentAction != null) text.AppendLine("진행 중인 행동: " + context.CurrentAction);
 
-            text.AppendLine("보이는 오브젝트:");
-            if (context.Objects.Count == 0) text.AppendLine("- 없음");
-            foreach (var item in context.Objects)
+            text.AppendLine("씬에 등록된 오브젝트 (카메라 영상 정보 없음):");
+            var objects = RequestObjects(context).ToArray();
+            if (objects.Length == 0) text.AppendLine("- 없음");
+            foreach (var item in objects)
             {
-                var verbs = AgentVocabulary.AlwaysAllowedVerbs.Concat(item.AllowedVerbs).Distinct();
-                text.Append("- ").Append(item.Id).Append(" (").Append(item.DisplayName).Append("): ")
-                    .Append(item.Description).Append(" / 상태: ").Append(item.State)
-                    .Append(" / 가능한 동작: ").Append(string.Join(", ", verbs));
+                bool canInteract = item.CanInteract ?? (item.AllowedVerbs.Contains(AgentVocabulary.Interact) ||
+                    item.AllowedVerbs.Contains(AgentVocabulary.Press));
+                var verbs = AgentVocabulary.AlwaysAllowedVerbs.Concat(item.AllowedVerbs)
+                    .Where(AgentResponseParser.IsImplemented)
+                    .Where(verb => verb != AgentVocabulary.Interact && verb != AgentVocabulary.Press);
+                if (canInteract) verbs = verbs.Append(AgentVocabulary.Interact);
+                text.Append("- ").Append(item.Id).Append(" (").Append(Limit(item.DisplayName)).Append(")")
+                    .Append(Position(item.PositionX, item.PositionY, item.PositionZ));
+                if (!string.IsNullOrWhiteSpace(item.SceneName)) text.Append(" / 오브젝트 이름: ").Append(Limit(item.SceneName));
+                if (item.Aliases.Count > 0) text.Append(" / 별칭: ").Append(string.Join(", ", item.Aliases.Take(6).Select(alias => Limit(alias, 40))));
+                if (!string.IsNullOrWhiteSpace(item.Description)) text.Append(" / 설명: ").Append(Limit(item.Description, 160));
+                if (!string.IsNullOrWhiteSpace(item.State)) text.Append(" / 상태: ").Append(Limit(item.State));
+                text.Append(" / 가능한 동작: ").Append(string.Join(", ", verbs.Distinct()));
                 if (item.MinTrust > 0)
                 {
                     text.Append(" / 무섭거나 내키지 않음: 신뢰도 ").Append(item.MinTrust).Append(" 이상이어야 조작함");
@@ -108,7 +130,7 @@ namespace AgentEscape.VoiceAI
         /// </summary>
         public static JObject BuildSchema(StageContext context)
         {
-            var ids = context.Objects.Select(o => o.Id).ToList();
+            var ids = RequestObjects(context).Select(o => o.Id);
 
             var action = new JObject
             {
@@ -116,13 +138,16 @@ namespace AgentEscape.VoiceAI
                 ["additionalProperties"] = false,
                 ["properties"] = new JObject
                 {
-                    ["verb"] = Enum(AgentVocabulary.Verbs),
-                    ["target"] = NullableEnum(ids, "행동 대상 오브젝트 ID"),
-                    ["item"] = NullableEnum(context.Inventory, "use에 사용할 가진 물건 ID"),
-                    ["direction"] = NullableEnum(AgentVocabulary.Directions, "move_direction의 방향"),
-                    ["steps"] = new JObject { ["type"] = new JArray("integer", "null"), ["description"] = "move_direction의 걸음 수" }
+                    ["verb"] = Enum(AgentVocabulary.Verbs.Where(AgentResponseParser.IsImplemented)),
+                    ["target"] = NullableEnum(ids, "행동 대상의 실제 오브젝트 ID"),
+                    ["item"] = new JObject { ["type"] = "null", ["description"] = "호환용 필드. 항상 null." },
+                    ["direction"] = NullableEnum(AgentVocabulary.Directions, "move_direction 방향. 행동 시작 시 로봇의 방향 기준."),
+                    ["steps"] = Nullable("integer", "칸이나 걸음 수 (1~10), direction과 함께 사용. distance와 동시 사용 금지."),
+                    ["distance"] = Nullable("number", "Unity 유닛으로 이동할 거리 (0.05~10), direction과 함께 사용. steps와 동시 사용 금지."),
+                    ["angle"] = Nullable("number", "rotate 상대 각도 (-180~180, 0 제외). 오른쪽 양수, 왼쪽 음수."),
+                    ["text"] = Nullable("string", "speak의 짧은 한국어 대사 (120자 이하).")
                 },
-                ["required"] = new JArray("verb", "target", "item", "direction", "steps")
+                ["required"] = new JArray("verb", "target", "item", "direction", "steps", "distance", "angle", "text")
             };
 
             return new JObject
@@ -131,12 +156,17 @@ namespace AgentEscape.VoiceAI
                 ["additionalProperties"] = false,
                 ["properties"] = new JObject
                 {
-                    ["speech"] = new JObject { ["type"] = "string", ["description"] = "요원의 대사. 자막에 표시된다." },
+                    ["speech"] = new JObject { ["type"] = "string", ["description"] = "요원의 짧은 응답. 행동 완료를 미리 주장하지 않는다." },
                     ["emotion"] = Enum(AgentVocabulary.Emotions),
                     ["comprehension"] = Enum(AgentVocabulary.Comprehension),
                     ["interpretation"] = new JObject { ["type"] = "string", ["description"] = "요원이 명령을 어떻게 이해했는지 한 문장" },
                     ["trust_delta"] = new JObject { ["type"] = "integer", ["description"] = "이번 발화로 인한 신뢰도 변화. -10~10" },
-                    ["actions"] = new JObject { ["type"] = "array", ["items"] = action }
+                    ["actions"] = new JObject
+                    {
+                        ["type"] = "array",
+                        ["items"] = action,
+                        ["description"] = "순서대로 실행할 행동 목록. 최대 5개."
+                    }
                 },
                 ["required"] = new JArray("speech", "emotion", "comprehension", "interpretation", "trust_delta", "actions")
             };
@@ -146,6 +176,31 @@ namespace AgentEscape.VoiceAI
         {
             return new JObject { ["role"] = role, ["content"] = content };
         }
+
+        internal static IEnumerable<StageObject> RequestObjects(StageContext context) => context.Objects
+            .Where(item => item != null && !string.IsNullOrWhiteSpace(item.Id))
+            .GroupBy(item => item.Id, System.StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.First())
+            .OrderByDescending(item => item.Id == context.SelectedTargetId ||
+                item.Id == context.CurrentAction?.Target || item.Id == context.LastAction?.Target)
+            .ThenBy(item => item.Id, System.StringComparer.Ordinal)
+            .Take(MaxSceneObjects);
+
+        private static string Limit(string value, int maxLength = 80)
+        {
+            string text = (value ?? "").Replace('\r', ' ').Replace('\n', ' ');
+            return text.Length <= maxLength ? text : text.Substring(0, maxLength);
+        }
+
+        private static string Format(float value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+
+        private static string Position(float? x, float? y, float? z) => x.HasValue && y.HasValue && z.HasValue
+            ? $" / 월드 위치 ({Format(x.Value)}, {Format(y.Value)}, {Format(z.Value)})"
+            : "";
+
+        private static JObject Nullable(string type, string description) =>
+            new JObject { ["type"] = new JArray(type, "null"), ["description"] = description };
 
         private static JObject Enum(IEnumerable<string> values)
         {

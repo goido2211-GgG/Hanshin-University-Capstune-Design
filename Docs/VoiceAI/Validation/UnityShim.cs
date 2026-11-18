@@ -21,6 +21,8 @@ namespace UnityEngine
         {
             foreach (var behaviour in Components.OfType<Behaviour>().ToArray()) behaviour.enabled = false;
             Components.Clear();
+            Physics.CapsuleCast = null;
+            Physics.CapsuleOverlap = null;
         }
     }
     public enum FindObjectsSortMode { None }
@@ -47,6 +49,7 @@ namespace UnityEngine
     {
         private readonly List<Component> _components = new List<Component>();
         public int scene = 1;
+        public int layer;
         public string tag = "Untagged";
         public static GameObject[] FindGameObjectsWithTag(string tag) =>
             Components.Select(c => c.gameObject).Distinct().Where(g => g.tag == tag).ToArray();
@@ -89,6 +92,7 @@ namespace UnityEngine
         public static Vector3 operator -(Vector3 a, Vector3 b) => new Vector3(a.x - b.x, a.y - b.y, a.z - b.z);
         public static Vector3 operator -(Vector3 a) => a * -1;
         public static Vector3 operator *(Vector3 a, float b) => new Vector3(a.x * b, a.y * b, a.z * b);
+        public static Vector3 operator /(Vector3 a, float b) => new Vector3(a.x / b, a.y / b, a.z / b);
         public static Vector3 MoveTowards(Vector3 a, Vector3 b, float amount) =>
             (b - a).magnitude <= amount ? b : a + (b - a).normalized * amount;
     }
@@ -97,6 +101,64 @@ namespace UnityEngine
         public Vector3 Forward;
         public static Quaternion LookRotation(Vector3 direction) => new Quaternion { Forward = direction.normalized };
         public static Quaternion RotateTowards(Quaternion a, Quaternion b, float amount) => b;
+        // Body의 Y축 회전만 표현한다.
+        public static Quaternion AngleAxis(float angle, Vector3 axis)
+        {
+            double radians = angle * axis.y * Math.PI / 180;
+            return new Quaternion { Forward = new Vector3((float)Math.Sin(radians), 0f, (float)Math.Cos(radians)) };
+        }
+        public static Quaternion operator *(Quaternion left, Quaternion right)
+        {
+            Vector3 a = left.Forward.sqrMagnitude > 0f ? left.Forward : new Vector3(0, 0, 1);
+            Vector3 b = right.Forward.sqrMagnitude > 0f ? right.Forward : new Vector3(0, 0, 1);
+            return new Quaternion { Forward = new Vector3(a.z * b.x + a.x * b.z, b.y, a.z * b.z - a.x * b.x) };
+        }
+    }
+    public enum QueryTriggerInteraction { UseGlobal, Ignore, Collide }
+    public struct LayerMask
+    {
+        public int value;
+        public static implicit operator int(LayerMask mask) => mask.value;
+        public static implicit operator LayerMask(int value) => new LayerMask { value = value };
+    }
+    public class Collider : Component
+    {
+        public bool isTrigger;
+        public bool enabled = true;
+    }
+    public struct RaycastHit
+    {
+        public Collider collider;
+    }
+    public static class Physics
+    {
+        public const int DefaultRaycastLayers = ~(1 << 2);
+        public static Func<Vector3, Vector3, float, Vector3, float, Collider> CapsuleCast;
+        public static Func<Vector3, Vector3, float, Collider> CapsuleOverlap;
+
+        public static void SyncTransforms() { }
+
+        public static int OverlapCapsuleNonAlloc(Vector3 bottom, Vector3 top, float radius, Collider[] results,
+            int layers, QueryTriggerInteraction triggers)
+        {
+            var collider = CapsuleOverlap?.Invoke(bottom, top, radius);
+            if (!IsQueryable(collider, layers, triggers)) return 0;
+            results[0] = collider;
+            return 1;
+        }
+
+        public static int CapsuleCastNonAlloc(Vector3 bottom, Vector3 top, float radius, Vector3 direction,
+            RaycastHit[] results, float distance, int layers, QueryTriggerInteraction triggers)
+        {
+            var collider = CapsuleCast?.Invoke(bottom, top, radius, direction, distance);
+            if (!IsQueryable(collider, layers, triggers)) return 0;
+            results[0] = new RaycastHit { collider = collider };
+            return 1;
+        }
+
+        private static bool IsQueryable(Collider collider, int layers, QueryTriggerInteraction triggers) =>
+            collider != null && collider.enabled && (layers & (1 << collider.gameObject.layer)) != 0 &&
+            (triggers != QueryTriggerInteraction.Ignore || !collider.isTrigger);
     }
     public static class Mathf
     {
@@ -146,7 +208,7 @@ namespace UnityEngine
     [AttributeUsage(AttributeTargets.Method)] public class ContextMenu : Attribute { public ContextMenu(string name) { } }
     [AttributeUsage(AttributeTargets.Class)] public class RequireComponent : Attribute { public RequireComponent(Type type) { } }
     [AttributeUsage(AttributeTargets.Field)] public class Min : Attribute { public Min(float value) { } }
-    [AttributeUsage(AttributeTargets.Field)] public class Range : Attribute { public Range(float min, float max) { } }
+    [AttributeUsage(AttributeTargets.Field)] public class RangeAttribute : Attribute { public RangeAttribute(float min, float max) { } }
     [AttributeUsage(AttributeTargets.Field)] public class Tooltip : Attribute { public Tooltip(string value) { } }
     [AttributeUsage(AttributeTargets.Field)] public class Header : Attribute { public Header(string value) { } }
     [AttributeUsage(AttributeTargets.Field)] public class TextArea : Attribute { public TextArea(int min = 0, int max = 0) { } }

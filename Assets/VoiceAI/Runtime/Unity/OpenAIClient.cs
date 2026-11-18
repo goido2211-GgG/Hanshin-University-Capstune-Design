@@ -12,7 +12,7 @@ namespace AgentEscape.VoiceAI
     public sealed class OpenAIClient
     {
         private const string BaseUrl = "https://api.openai.com/v1/";
-        private const int MaxAttempts = 3;
+        private const int MaxAttempts = 2;
         private const int TimeoutSeconds = 30;
 
         private readonly string _apiKey;
@@ -26,7 +26,7 @@ namespace AgentEscape.VoiceAI
         {
             byte[] body = Encoding.UTF8.GetBytes(request.ToString(Newtonsoft.Json.Formatting.None));
             string text = await SendAsync("responses", body, "application/json", cancellation);
-            return JObject.Parse(text);
+            return ReadJson(text);
         }
 
         public async Task<string> TranscribeAsync(byte[] wav, string model, string language, string prompt,
@@ -37,13 +37,19 @@ namespace AgentEscape.VoiceAI
             form.AddField("model", model);
             form.AddField("languages[]", language);
             if (!string.IsNullOrEmpty(prompt)) form.AddField("prompt", prompt);
-            foreach (string keyword in keywords.Select(CleanKeyword).Where(k => k.Length > 0).Distinct())
+            foreach (string keyword in keywords.Select(CleanKeyword).Where(k => k.Length > 0).Distinct().Take(32))
             {
                 form.AddField("keywords[]", keyword);
             }
 
             string text = await SendAsync("audio/transcriptions", form.ToArray(), form.ContentType, cancellation);
-            return ((string)JObject.Parse(text)["text"] ?? "").Trim();
+            return ((string)ReadJson(text)["text"] ?? "").Trim();
+        }
+
+        private static JObject ReadJson(string text)
+        {
+            try { return JObject.Parse(text); }
+            catch (Newtonsoft.Json.JsonException) { throw new AgentApiException("OpenAI 응답을 읽지 못했습니다."); }
         }
 
         // 키워드에 이 문자가 있으면 API가 요청 전체를 거부한다.
@@ -79,13 +85,13 @@ namespace AgentEscape.VoiceAI
                     }
 
                     long status = request.responseCode;
-                    string responseText = request.downloadHandler?.text ?? "";
-                    bool quotaExhausted = responseText.Contains("insufficient_quota");
+                    string errorCode = ReadErrorCode(request.downloadHandler?.text);
+                    bool quotaExhausted = errorCode == "insufficient_quota";
                     bool retryable = !quotaExhausted && (status == 0 || status == 408 || status == 429 || status >= 500);
 
                     if (!retryable || attempt >= MaxAttempts)
                     {
-                        throw new AgentApiException(DescribeError(status, responseText, request.error, quotaExhausted));
+                        throw new AgentApiException(DescribeError(status, errorCode));
                     }
                 }
 
@@ -93,16 +99,24 @@ namespace AgentEscape.VoiceAI
             }
         }
 
-        private static string DescribeError(long status, string body, string transportError, bool quotaExhausted)
+        private static string ReadErrorCode(string body)
         {
-            if (quotaExhausted) return "OpenAI 충전 잔액이 부족합니다.";
-            if (status == 401) return "API 키가 올바르지 않습니다.";
-            if (status == 0) return "네트워크 연결 실패: " + transportError;
+            if (string.IsNullOrEmpty(body)) return null;
+            try { return (string)(JObject.Parse(body)["error"] as JObject)?["code"]; }
+            catch (Newtonsoft.Json.JsonException) { return null; }
+        }
 
-            string detail = body;
-            try { detail = (string)JObject.Parse(body)["error"]?["message"] ?? body; }
-            catch (Newtonsoft.Json.JsonException) { }
-            return "OpenAI 오류 " + status + ": " + detail;
+        private static string DescribeError(long status, string errorCode)
+        {
+            if (errorCode == "insufficient_quota") return "OpenAI API 할당량 또는 결제 잔액을 확인해 주세요.";
+            if (status == 401) return "OpenAI API 키 인증에 실패했습니다.";
+            if (status == 403 || status == 404 || errorCode == "model_not_found")
+                return "설정한 OpenAI 모델을 사용할 수 없습니다. 모델 ID와 API 프로젝트의 접근 권한을 확인해 주세요.";
+            if (status == 429) return "OpenAI 요청 한도에 도달했습니다. 잠시 후 다시 지시해 주세요.";
+            if (status == 0 || status == 408) return "OpenAI 연결이 끊겼거나 응답 시간이 초과됐습니다.";
+            if (status == 400) return "OpenAI가 요청 형식을 받지 못했습니다. 모델의 구조화 출력과 요청 설정을 확인해 주세요.";
+            if (status >= 500) return "OpenAI 서비스에 일시적인 문제가 있습니다.";
+            return "OpenAI 요청에 실패했습니다. (HTTP " + status + ")";
         }
     }
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
@@ -11,63 +11,99 @@ namespace AgentEscape.VoiceAI
         public const int MaxActionsPerTurn = 5;
         public const int MaxTrustDelta = 10;
         public const int MaxSteps = 10;
+        public const float MinDistance = 0.05f;
+        public const float MaxDistance = 10f;
+        public const float MaxRotationDegrees = 180f;
+        public const int MaxSpeechLength = 120;
 
         /// <summary>Responses API의 원본 JSON에서 AgentResponse를 꺼낸다.</summary>
         public static AgentResponse Parse(JObject apiResponse)
         {
-            string status = (string)apiResponse["status"];
+            string status = (string)apiResponse?["status"];
             if (status != "completed")
             {
-                string reason = (string)apiResponse["incomplete_details"]?["reason"]
-                                ?? (string)apiResponse["error"]?["message"]
-                                ?? "unknown";
-                throw new AgentApiException("LLM 응답이 완료되지 않았습니다. status=" + status + ", reason=" + reason);
+                string reason = (string)(apiResponse?["incomplete_details"] as JObject)?["reason"];
+                throw new AgentApiException(reason == "max_output_tokens"
+                    ? "명령 해석이 모델의 출력 한도를 넘었습니다. 명령을 짧게 나눠 주세요."
+                    : "OpenAI가 명령 해석을 끝내지 못했습니다.");
             }
 
-            // output_text는 SDK 편의 속성이라 원본 HTTP 응답에는 없다. output 배열을 직접 읽는다.
-            var message = apiResponse["output"]?.FirstOrDefault(item => (string)item["type"] == "message");
-            var content = message?["content"] as JArray;
-            if (content == null) throw new AgentApiException("LLM 응답에 메시지가 없습니다.");
-
-            var refusal = content.FirstOrDefault(part => (string)part["type"] == "refusal");
-            if (refusal != null) throw new AgentApiException("LLM이 응답을 거부했습니다: " + (string)refusal["refusal"]);
+            // Responses HTTP의 메시지와 content에서 구조화된 텍스트를 가져온다.
+            var message = (apiResponse["output"] as JArray)?.OfType<JObject>()
+                .FirstOrDefault(item => (string)item["type"] == "message");
+            var content = (message?["content"] as JArray)?.OfType<JObject>().ToArray();
+            if (content == null) throw new AgentApiException("OpenAI 응답에 메시지가 없습니다.");
+            if (content.Any(part => (string)part["type"] == "refusal"))
+                throw new AgentApiException("OpenAI가 이 명령의 해석을 거부했습니다.");
 
             string json = (string)content.FirstOrDefault(part => (string)part["type"] == "output_text")?["text"];
-            if (string.IsNullOrEmpty(json)) throw new AgentApiException("LLM 응답에 텍스트가 없습니다.");
+            if (string.IsNullOrEmpty(json)) throw new AgentApiException("OpenAI 응답에 텍스트가 없습니다.");
 
             try
             {
-                var response = JsonConvert.DeserializeObject<AgentResponse>(json);
-                if (response == null) throw new AgentApiException("LLM 응답이 비어 있습니다.");
-                if (response.Actions == null) response.Actions = new List<AgentAction>();
+                var plan = JObject.Parse(json, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
+                if (!(plan["actions"] is JArray actions) || actions.Any(action => !HasValidArgumentTypes(action)))
+                    throw new AgentApiException("OpenAI 응답의 행동 인자 형식이 올바르지 않습니다.");
+                var response = plan.ToObject<AgentResponse>();
+                if (response.Speech != null && response.Speech.Length > MaxSpeechLength)
+                    response.Speech = response.Speech.Substring(0, MaxSpeechLength);
                 return response;
             }
             catch (JsonException e)
             {
-                throw new AgentApiException("LLM 응답 JSON을 읽지 못했습니다.", e);
+                throw new AgentApiException("OpenAI 응답의 명령 형식을 읽지 못했습니다.", e);
             }
         }
 
-        /// <summary>
-        /// 게임 규칙의 최종 판정. 스키마를 통과했어도 현재 상태에서 불가능한 행동은 여기서 걸러낸다.
-        /// 플레이어가 프롬프트를 조작해도 퍼즐을 건너뛸 수 없게 하는 마지막 관문이다.
-        /// </summary>
+        // Json.NET은 문자열 숫자도 수치 필드로 변환하므로 변환 전에 JSON 타입을 확인한다.
+        private static bool HasValidArgumentTypes(JToken token)
+        {
+            if (!(token is JObject action) || action["verb"]?.Type != JTokenType.String) return false;
+            foreach (var field in action.Properties())
+            {
+                var type = field.Value.Type;
+                switch (field.Name)
+                {
+                    case "verb":
+                    case "target":
+                    case "item":
+                    case "direction":
+                    case "text":
+                        if (type != JTokenType.Null && type != JTokenType.String) return false;
+                        break;
+                    case "steps":
+                        if (type != JTokenType.Null && type != JTokenType.Integer) return false;
+                        break;
+                    case "distance":
+                    case "angle":
+                        if (type != JTokenType.Null && type != JTokenType.Integer && type != JTokenType.Float) return false;
+                        break;
+                    default: return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>게임 상태와 권한을 기준으로 실행 계획을 확인한다.</summary>
         public static void Validate(AgentResponse response, StageContext context, int trust,
             List<AgentAction> accepted, List<RejectedAction> rejected, bool checkInventory = true)
         {
-            foreach (var action in response.Actions ?? new List<AgentAction>())
+            var actions = response.Actions;
+            if (actions == null) return;
+            if (actions.Count > MaxActionsPerTurn)
             {
-                if (action != null && action.Verb == AgentVocabulary.MoveDirection)
-                    action.Steps = Math.Max(1, Math.Min(MaxSteps, action.Steps ?? 1));
-                if (accepted.Count >= MaxActionsPerTurn)
-                {
-                    rejected.Add(new RejectedAction { Action = action, Reason = "한 턴 행동 수 초과" });
-                    continue;
-                }
+                rejected.Add(new RejectedAction { Reason = "한 번에 최대 5개 행동을 지시할 수 있습니다." });
+                return;
+            }
 
-                string reason = response.Comprehension == AgentVocabulary.Asking || response.Comprehension == AgentVocabulary.Refused
-                    ? "질문 또는 거부 응답의 행동은 실행하지 않습니다."
+            foreach (var action in actions)
+            {
+                string reason = response.Comprehension != AgentVocabulary.Understood
+                    ? "확실하게 이해한 명령만 실행합니다."
                     : CheckAction(action, context, trust, checkInventory);
+                if (reason == null && IsButtonAction(action.Verb) &&
+                    context.Objects.Any(target => target.Id == action.Target && target.CanInteract == false))
+                    reason = "지정한 버튼이 현재 연결되어 있지 않습니다.";
                 if (reason != null)
                 {
                     rejected.Add(new RejectedAction { Action = action, Reason = reason });
@@ -80,42 +116,62 @@ namespace AgentEscape.VoiceAI
 
         public static string CheckAction(AgentAction action, StageContext context, int trust, bool checkInventory = true)
         {
-            if (action == null) return "행동이 비어 있음";
-            if (!AgentVocabulary.Verbs.Contains(action.Verb)) return "알 수 없는 동사: " + action.Verb;
-            if (!IsImplemented(action.Verb)) return "아직 구현되지 않은 행동: " + action.Verb;
+            if (action == null) return "행동이 비어 있습니다.";
+            if (!IsImplemented(action.Verb)) return "아직 사용할 수 없는 행동입니다.";
 
-            if (checkInventory && action.Item != null && !context.Inventory.Contains(action.Item))
+            bool isMovement = action.Verb == AgentVocabulary.MoveDirection;
+            bool noTarget = AgentVocabulary.NoTargetVerbs.Contains(action.Verb);
+            if (action.Item != null || (noTarget && action.Target != null) ||
+                (!isMovement && (action.Direction != null || action.Steps.HasValue || action.Distance.HasValue)) ||
+                (action.Verb != AgentVocabulary.Rotate && action.Angle.HasValue) ||
+                (action.Verb != AgentVocabulary.Speak && action.Text != null))
+                return "행동에 사용할 수 없는 인자가 있습니다.";
+
+            if (isMovement)
             {
-                return "가지고 있지 않은 물건: " + action.Item;
+                if (!AgentVocabulary.Directions.Contains(action.Direction)) return "어느 방향으로 갈까요?";
+                if (action.Distance.HasValue && action.Steps.HasValue) return "걸음 수와 거리는 하나만 지정해 주세요.";
+                if (action.Steps.HasValue && (action.Steps.Value < 1 || action.Steps.Value > MaxSteps))
+                    return "한 번에 1~10칸까지 이동할 수 있습니다.";
+                if (action.Distance.HasValue && !InRange(action.Distance.Value, MinDistance, MaxDistance))
+                    return "한 번에 0.05~10 유닛까지 이동할 수 있습니다.";
             }
+            if (action.Verb == AgentVocabulary.Rotate &&
+                (!action.Angle.HasValue || action.Angle.Value == 0 || !InRange(action.Angle.Value, -MaxRotationDegrees, MaxRotationDegrees)))
+                return "0도를 제외한 180도 이내의 회전 각도를 지정해 주세요.";
+            if (action.Verb == AgentVocabulary.Speak && (string.IsNullOrWhiteSpace(action.Text) || action.Text.Length > MaxSpeechLength))
+                return "말할 문장을 120자 이내로 지정해 주세요.";
+            if (noTarget) return null;
 
-            if (action.Verb == AgentVocabulary.MoveDirection &&
-                !AgentVocabulary.Directions.Contains(action.Direction))
-            {
-                return "방향이 없음";
-            }
-            if (action.Verb == AgentVocabulary.MoveDirection && action.Steps.HasValue &&
-                (action.Steps.Value < 1 || action.Steps.Value > MaxSteps)) return "걸음 수 범위를 벗어났습니다.";
-
-            if (AgentVocabulary.NoTargetVerbs.Contains(action.Verb)) return null;
-
-            if (action.Target == null) return action.Verb + "에 대상이 없음";
+            if (string.IsNullOrWhiteSpace(action.Target)) return "어느 대상을 말씀하시는 건가요?";
             var targets = context.Objects.Where(o => o.Id == action.Target).ToArray();
-            if (targets.Length != 1) return "없거나 중복된 오브젝트: " + action.Target;
+            if (targets.Length == 0) return "지정한 대상을 씬에서 찾지 못했습니다.";
+            if (targets.Length != 1) return "대상 ID가 중복되었습니다.";
             var target = targets[0];
             if (AgentVocabulary.AlwaysAllowedVerbs.Contains(action.Verb)) return null;
             if (checkInventory && action.Verb == AgentVocabulary.Drop && !context.Inventory.Contains(action.Target))
-                return "가지고 있지 않은 대상: " + action.Target;
+                return "가지고 있지 않은 대상: " + target.DisplayName;
             if (checkInventory && action.Verb == AgentVocabulary.PickUp && context.Inventory.Contains(action.Target))
-                return "이미 들고 있는 대상: " + action.Target;
-            if (!target.AllowedVerbs.Contains(action.Verb)) return target.Id + "에는 " + action.Verb + "을(를) 할 수 없음";
-            if (trust < target.MinTrust) return target.Id + " 조작에 신뢰도 " + target.MinTrust + " 필요 (현재 " + trust + ")";
+                return "이미 들고 있는 대상: " + target.DisplayName;
+            bool isButtonAction = IsButtonAction(action.Verb);
+            bool allowed = isButtonAction
+                ? target.AllowedVerbs.Contains(AgentVocabulary.Press) || target.AllowedVerbs.Contains(AgentVocabulary.Interact)
+                : target.AllowedVerbs.Contains(action.Verb);
+            if (!allowed) return isButtonAction
+                ? "지정한 대상에 사용할 수 있는 버튼 동작이 없습니다."
+                : "지정한 대상에 이 행동을 실행할 수 없습니다.";
+            if (trust < target.MinTrust) return target.DisplayName + " 조작에 신뢰도 " + target.MinTrust + " 필요 (현재 " + trust + ")";
             return null;
         }
+
+        private static bool InRange(float value, float minimum, float maximum) => value >= minimum && value <= maximum;
+
+        private static bool IsButtonAction(string verb) => verb == AgentVocabulary.Interact || verb == AgentVocabulary.Press;
 
         public static bool IsImplemented(string verb) => verb == AgentVocabulary.MoveTo ||
             verb == AgentVocabulary.MoveDirection || verb == AgentVocabulary.Inspect ||
             verb == AgentVocabulary.PickUp || verb == AgentVocabulary.Drop ||
-            verb == AgentVocabulary.Wait || verb == AgentVocabulary.Stop || verb == AgentVocabulary.Press;
+            verb == AgentVocabulary.Wait || verb == AgentVocabulary.Stop || verb == AgentVocabulary.Press ||
+            verb == AgentVocabulary.Interact || verb == AgentVocabulary.Rotate || verb == AgentVocabulary.Speak;
     }
 }

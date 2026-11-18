@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,6 +7,8 @@ using UnityEngine;
 
 namespace AgentEscape.VoiceAI
 {
+    public enum AgentCommandRouting { PreferLocal, ApiInterpretation, LocalOnly }
+
     public enum VoiceAgentState { Idle, Recording, Transcribing, Thinking }
 
     [RequireComponent(typeof(SceneStageContext))]
@@ -16,7 +19,11 @@ namespace AgentEscape.VoiceAI
         [Header("API 연결")]
         [Tooltip("기존 씬은 시작 시 연결합니다. 통합 시험 씬은 끄고 첫 음성/일반 채팅 요청 때 연결합니다.")]
         public bool initializeApiOnAwake = true;
+        [Tooltip("Prefer Local: 확실한 명령만 로컬. Api Interpretation: 일반 명령은 API. Local Only: 키 없는 채팅 시험.")]
+        public AgentCommandRouting commandRouting = AgentCommandRouting.PreferLocal;
         public bool ApiReady => _brain != null;
+        public AgentApiMetrics LastApiMetrics => _brain?.LastApiMetrics;
+        public long? LastTranscriptionMilliseconds { get; private set; }
 
         [Header("모델")]
         public string llmModel = "gpt-6-luna";
@@ -49,6 +56,7 @@ namespace AgentEscape.VoiceAI
         private CancellationTokenSource _lifetime;
         private CancellationTokenSource _request;
         private AgentCommandId _requestId;
+        private AgentAction _previousAction;
 
         private AgentActionRunner EnsureRunner()
         {
@@ -69,7 +77,7 @@ namespace AgentEscape.VoiceAI
             EnsureRunner();
             _lifetime = new CancellationTokenSource();
             _recorder = new MicrophoneRecorder(maxRecordingSeconds);
-            if (initializeApiOnAwake) EnsureApiReady();
+            if (initializeApiOnAwake && commandRouting != AgentCommandRouting.LocalOnly) EnsureApiReady();
         }
 
         private bool EnsureApiReady()
@@ -82,17 +90,31 @@ namespace AgentEscape.VoiceAI
                 Fail(StartupError);
                 return false;
             }
+            string apiKey;
+            try { apiKey = OpenAIKeyProvider.Load(); }
+            catch (Exception)
+            {
+                StartupError = "OpenAI API 키를 불러오지 못했습니다. 키 설정을 확인해 주세요.";
+                Fail(StartupError);
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                StartupError = "OpenAI API 키가 설정되지 않았습니다.";
+                Fail(StartupError);
+                return false;
+            }
             try
             {
-                _client = new OpenAIClient(OpenAIKeyProvider.Load());
+                _client = new OpenAIClient(apiKey);
                 _brain = new AgentBrain(prompt.text, new LlmSettings
                 { Model = llmModel, ReasoningEffort = reasoningEffort, MaxOutputTokens = maxOutputTokens }, _client.CreateResponseAsync);
                 StartupError = "";
                 return true;
             }
-            catch (Exception error)
+            catch (Exception)
             {
-                StartupError = "API 연결 초기화 실패: " + error.Message;
+                StartupError = "OpenAI API 연결을 초기화하지 못했습니다. 모델과 연결 설정을 확인해 주세요.";
                 Fail(StartupError);
                 return false;
             }
@@ -111,14 +133,16 @@ namespace AgentEscape.VoiceAI
             if (!result.CommandId.Equals(_requestId)) return;
             CancelRequest();
             SetState(VoiceAgentState.Idle);
-            if (result.Outcome != AgentExecutionOutcome.Completed) ReportEvent(result.Message);
         }
 
         private AgentCommandId BeginInput()
         {
+            var previousAction = EnsureRunner().CurrentActionForContext;
             CancelRequest();
             // 먼저 이전 실행을 취소한다. 새 ID는 STT와 LLM을 거쳐 동일하게 유지된다.
-            var id = EnsureRunner().BeginCommand();
+            var id = _runner.BeginCommand();
+            if (!_runner.IsCurrent(id)) return id;
+            _previousAction = previousAction;
             _requestId = id;
             _request = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             return id;
@@ -139,8 +163,15 @@ namespace AgentEscape.VoiceAI
 
         public void StartVoiceInput()
         {
-            if (!isActiveAndEnabled || State == VoiceAgentState.Recording || !EnsureApiReady()) return;
+            if (!isActiveAndEnabled || State == VoiceAgentState.Recording) return;
+            if (commandRouting == AgentCommandRouting.LocalOnly)
+            {
+                Say("로컬 테스트 모드에서는 채팅으로 명령해 주세요.");
+                return;
+            }
+            if (!EnsureApiReady()) return;
             var id = BeginInput();
+            if (!_runner.IsCurrent(id)) return;
             try { _recorder.Start(); SetState(VoiceAgentState.Recording); }
             catch (Exception error) { HandleFailure(id, "", error); }
         }
@@ -160,14 +191,8 @@ namespace AgentEscape.VoiceAI
             if (AgentCommandRules.IsStop(text)) { RequestStop(); return true; }
             if (AgentCommandRules.IsResumeExploration(text)) { ResumeExploration(); return true; }
             if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(text)) return false;
-            if (AgentCommandRules.TryParseButtonCommand(text, out var verb, out var selector))
-            {
-                SubmitButtonCommand(BeginInput(), verb, selector);
-                return true;
-            }
-            if (!EnsureApiReady()) return false;
             var id = BeginInput();
-            _ = RunTurnAsync(id, text, _request.Token);
+            if (_runner.IsCurrent(id)) _ = RouteTextAsync(id, text, _request.Token);
             return true;
         }
 
@@ -175,12 +200,75 @@ namespace AgentEscape.VoiceAI
 
         public void SetExplorationEnabled(bool enabled) => EnsureRunner().SetExplorationEnabled(enabled);
 
-        private void SubmitButtonCommand(AgentCommandId id, string verb, string selector)
+        internal void Say(string message) => AgentEventDispatch.Invoke(LocalNotice, "요원: " + message);
+
+        private Task RouteTextAsync(AgentCommandId id, string text, CancellationToken token)
         {
-            if (!_runner.IsCurrent(id)) return;
-            string error = _stage.ResolveButton(selector, out var target);
-            _runner.Submit(id, error == null ? new[] { new AgentAction { Verb = verb, Target = target.id } }
-                : Array.Empty<AgentAction>(), error, target);
+            if (!IsCurrent(id, token)) return Task.CompletedTask;
+            if (text.Trim().Length > AgentBrain.MaxPlayerTextLength)
+            {
+                const string message = "한 번에 300자 이내로 지시해 주세요.";
+                _runner.Submit(id, Array.Empty<AgentAction>(), message);
+                Say(message);
+                return Task.CompletedTask;
+            }
+            if (SceneCommandTargeting.IsNeighborCorrection(text))
+            {
+                string error = _stage.ResolveNeighborButton(_runner.SelectedTarget, out var neighbor);
+                if (error == null) _runner.SelectTarget(neighbor);
+                _runner.Submit(id, Array.Empty<AgentAction>(), error);
+                Say(error ?? $"옆의 {neighbor.displayName}을(를) 선택했습니다. 어떻게 할까요?");
+                return Task.CompletedTask;
+            }
+            if (commandRouting != AgentCommandRouting.ApiInterpretation && TrySubmitLocal(id, text))
+                return Task.CompletedTask;
+            if (commandRouting == AgentCommandRouting.LocalOnly)
+            {
+                const string message = "로컬 테스트 모드에서 해석하지 못했습니다. 이 표현은 API 해석 모드에서 시도해 주세요.";
+                _runner.Submit(id, Array.Empty<AgentAction>(), message);
+                Say(message);
+                return Task.CompletedTask;
+            }
+            if (!EnsureApiReady())
+            {
+                _runner.Fail(id, StartupError);
+                Say(StartupError);
+                return Task.CompletedTask;
+            }
+            return RunTurnAsync(id, text, token);
+        }
+
+        private bool TrySubmitLocal(AgentCommandId id, string text)
+        {
+            if (AgentCommandRules.TryParseMotionCommand(text, out var motion))
+            {
+                _runner.Submit(id, motion, null);
+                return true;
+            }
+            if (!SceneCommandTargeting.TryParseButtonPlan(text, out string selector, out bool useSelected, out var verbs))
+                return false;
+
+            var target = useSelected ? _runner.SelectedTarget : null;
+            string error;
+            if (useSelected)
+                error = target != null && target.Button != null ? null : "어느 버튼을 누를까요? 이름이나 번호를 알려 주세요.";
+            else
+            {
+                error = _stage.ResolveButton(selector, out target, out bool noMatch);
+                // Complex descriptions can resemble a local button command. Let the API interpret them.
+                if (noMatch && selector.Length > 0 && commandRouting == AgentCommandRouting.PreferLocal &&
+                    EnsureApiReady()) return false;
+            }
+            if (error != null)
+            {
+                _runner.Submit(id, Array.Empty<AgentAction>(), error);
+                Say(error);
+                return true;
+            }
+
+            var targets = new Dictionary<string, AgentInteractable>(StringComparer.Ordinal) { [target.id] = target };
+            _runner.Submit(id, verbs.Select(verb => new AgentAction { Verb = verb, Target = target.id }), null, targets);
+            return true;
         }
 
         public void ResumeExploration()
@@ -192,6 +280,8 @@ namespace AgentEscape.VoiceAI
         public void ResetConversation(bool keepTrust = true)
         {
             RequestStop();
+            _runner?.ClearCommandContext();
+            _previousAction = null;
             _brain?.ResetConversation(keepTrust);
         }
 
@@ -205,8 +295,18 @@ namespace AgentEscape.VoiceAI
                 if (audio.Rms < SilenceRms) { HandleFailure(id, "", new AgentApiException("녹음된 소리가 거의 없습니다. 마이크를 확인해 주세요.")); return; }
                 SetState(VoiceAgentState.Transcribing);
                 if (!IsCurrent(id, token)) return;
-                var keywords = _stage.Build().Objects.Select(o => o.DisplayName).ToArray();
-                string text = await _client.TranscribeAsync(audio.Wav, transcribeModel, language, transcribePrompt, keywords, token);
+                var keywords = _stage.BuildForCommand().Objects.Select(o => o.DisplayName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name)).Distinct().Take(24).ToArray();
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                string text;
+                try
+                {
+                    text = await _client.TranscribeAsync(audio.Wav, transcribeModel, language, transcribePrompt, keywords, token);
+                }
+                finally
+                {
+                    if (IsCurrent(id, token)) LastTranscriptionMilliseconds = timer.ElapsedMilliseconds;
+                }
                 if (!IsCurrent(id, token)) return;
                 AgentEventDispatch.Invoke(PlayerTranscribed, text);
                 if (!IsCurrent(id, token)) return;
@@ -218,14 +318,9 @@ namespace AgentEscape.VoiceAI
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(text)) { _runner.Fail(id, "음성 인식 결과가 없습니다."); return; }
-                if (AgentCommandRules.TryParseButtonCommand(text, out var verb, out var selector))
-                {
-                    SubmitButtonCommand(id, verb, selector);
-                    return;
-                }
-                await RunTurnAsync(id, text, token);
+                await RouteTextAsync(id, text, token);
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) when (!IsCurrent(id, token)) { }
             catch (Exception error) { if (IsCurrent(id, token)) HandleFailure(id, "", error); }
         }
 
@@ -236,35 +331,52 @@ namespace AgentEscape.VoiceAI
                 if (!IsCurrent(id, token)) return;
                 SetState(VoiceAgentState.Thinking);
                 if (!IsCurrent(id, token)) return;
-                var prepared = await _brain.PrepareTurnAsync(text, _stage.Build(), token);
+                var context = _stage.BuildForCommand();
+                _runner.PopulateCommandContext(context, _previousAction);
+                var knownTargets = new Dictionary<string, AgentInteractable>(StringComparer.Ordinal);
+                foreach (var item in AgentRequestBuilder.RequestObjects(context))
+                    if (_stage.TryResolve(item.Id, out var target)) knownTargets.Add(item.Id, target);
+                var prepared = await _brain.PrepareTurnAsync(text, context, token);
                 if (!IsCurrent(id, token)) return;
                 // 최신성 검사와 상태 확정 사이에 await/외부 이벤트를 두지 않는다.
                 var result = _brain.CommitTurn(prepared);
                 result.CommandId = id;
                 var actions = result.Actions.Select(AgentCommandRules.Copy).ToArray();
-                string rejection = result.Rejected.Count == 0 ? null : string.Join("; ", result.Rejected.Select(r => r.Reason));
+                string groundingError = result.Rejected.Count == 0
+                    ? SceneCommandTargeting.CheckGrounding(text, context, actions) : null;
+                string rejection = result.Rejected.Count == 0 ? groundingError : result.Rejected[0].Reason;
+                if (rejection == null && actions.Any(action => action.Target != null && !knownTargets.ContainsKey(action.Target)))
+                    rejection = "지정한 대상을 씬에서 찾지 못했습니다.";
+                if (rejection != null)
+                {
+                    result.Response.Speech = rejection;
+                    if (groundingError != null) result.Response.Comprehension = AgentVocabulary.Asking;
+                    result.Actions.Clear();
+                }
                 SetState(VoiceAgentState.Idle);
                 if (!IsCurrent(id, token)) return;
                 AgentEventDispatch.Invoke(TurnCompleted, result);
-                if (IsCurrent(id, token)) _runner.Submit(id, actions, rejection);
+                if (IsCurrent(id, token)) _runner.Submit(id, actions, rejection, knownTargets);
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) when (!IsCurrent(id, token)) { }
             catch (Exception error) { if (IsCurrent(id, token)) HandleFailure(id, text, error); }
         }
 
         private void HandleFailure(AgentCommandId id, string text, Exception error)
         {
             if (_runner == null || !_runner.IsCurrent(id)) return;
-            Fail(error.Message);
+            string message = error is OperationCanceledException ? "OpenAI 응답 시간이 초과됐습니다. 다시 시도해 주세요." :
+                error is AgentApiException ? error.Message : "요청을 처리하지 못했습니다. 연결 상태를 확인해 주세요.";
+            Fail(message);
             if (!_runner.IsCurrent(id)) return;
             SetState(VoiceAgentState.Idle);
             if (!_runner.IsCurrent(id)) return;
             AgentEventDispatch.Invoke(TurnCompleted, new AgentTurnResult
             {
                 CommandId = id, PlayerText = text, Trust = Trust, IsFallback = true, Directive = new TurnDirective(),
-                Response = new AgentResponse { Speech = "치직... 목소리가 끊겼어요. 다시 말해 주실래요?", Emotion = "confused", Comprehension = AgentVocabulary.Asking }
+                Response = new AgentResponse { Speech = message, Emotion = "confused", Comprehension = AgentVocabulary.Asking }
             });
-            _runner.Fail(id, error.Message);
+            _runner.Fail(id, message);
         }
 
         private void SetState(VoiceAgentState state)

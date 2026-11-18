@@ -27,6 +27,7 @@ namespace AgentEscape.VoiceAI
         public event Action<AgentExecutionResult> CommandFinished;
 
         private readonly Guid _session = Guid.NewGuid();
+        private readonly StageContext _validationContext = new StageContext();
         private long _sequence;
         private bool _active;
         private List<AgentAction> _actions;
@@ -36,8 +37,48 @@ namespace AgentEscape.VoiceAI
         private SceneStageContext _stage;
         private AgentBodyController _body;
         private float _autonomousRadius;
-        private AgentInteractable _expectedTarget;
-        private bool _hasExpectedTarget;
+        private IReadOnlyDictionary<string, AgentInteractable> _expectedTargets;
+        private AgentInteractable _selectedTarget;
+        private AgentAction _lastAction;
+        private bool? _lastActionSucceeded;
+
+        internal AgentInteractable SelectedTarget => _selectedTarget != null &&
+            _stage.TryResolve(_selectedTarget.id, out var current) && current == _selectedTarget ? current : null;
+
+        internal AgentAction CurrentActionForContext => CopyForContext(CurrentAction);
+        private AgentAction CurrentAction => _active && _actions != null && _index >= 0 && _index < _actions.Count
+            ? _actions[_index] : null;
+
+        internal void SelectTarget(AgentInteractable target) => _selectedTarget = target;
+
+        internal void ClearCommandContext()
+        {
+            _selectedTarget = null;
+            _lastAction = null;
+            _lastActionSucceeded = null;
+        }
+
+        internal void PopulateCommandContext(StageContext context, AgentAction previousAction)
+        {
+            context.SelectedTargetId = SelectedTarget?.id;
+            context.LastAction = CopyForContext(_lastAction);
+            context.LastActionSucceeded = _lastActionSucceeded;
+            context.CurrentAction = previousAction;
+            if (_body == null || !_body.isActiveAndEnabled) return;
+            Vector3 position = _body.transform.position;
+            Vector3 forward = _body.transform.forward;
+            context.AgentPositionX = position.x;
+            context.AgentPositionY = position.y;
+            context.AgentPositionZ = position.z;
+            context.AgentHeading = (float)(Math.Atan2(forward.x, forward.z) * 180.0 / Math.PI);
+        }
+
+        private static AgentAction CopyForContext(AgentAction action)
+        {
+            var copy = AgentCommandRules.Copy(action);
+            if (copy != null) copy.Text = null;
+            return copy;
+        }
 
         internal void Initialize(VoiceAgent owner, SceneStageContext stage) { _owner = owner; _stage = stage; }
 
@@ -73,8 +114,9 @@ namespace AgentEscape.VoiceAI
 
         private AgentCommandId StartCommand(AgentCommandSource source)
         {
-            Cancel("새 플레이어 명령으로 교체되었습니다.");
             var id = new AgentCommandId(_session, ++_sequence);
+            Cancel("새 플레이어 명령으로 교체되었습니다.");
+            if (_sequence != id.Sequence) return id;
             CurrentCommand = id;
             CurrentSource = source;
             _active = true;
@@ -87,18 +129,21 @@ namespace AgentEscape.VoiceAI
         }
 
         internal void Submit(AgentCommandId id, IEnumerable<AgentAction> actions, string rejection,
-            AgentInteractable expectedTarget = null)
+            IReadOnlyDictionary<string, AgentInteractable> expectedTargets = null)
         {
             if (!IsCurrent(id) || State != AgentExecutionState.AwaitingInterpretation) return;
             if (rejection != null) { Finish(AgentExecutionOutcome.Rejected, rejection); return; }
-            _expectedTarget = expectedTarget;
-            _hasExpectedTarget = expectedTarget != null;
+            _expectedTargets = expectedTargets;
             _actions = actions.Select(AgentCommandRules.Copy).ToList();
             if (CurrentSource == AgentCommandSource.Autonomous && _actions.Any(a =>
                 a == null || (a.Verb != AgentVocabulary.MoveTo && a.Verb != AgentVocabulary.Inspect)))
             { Finish(AgentExecutionOutcome.Rejected, "자율 탐색은 이동·조사만 허용합니다."); return; }
-            if (!_hasExpectedTarget && _actions.Any(a => a?.Verb == AgentVocabulary.Press))
-            { Finish(AgentExecutionOutcome.Rejected, "버튼은 이름 또는 별칭과 함께 '버튼 눌러' 형식으로 지시해 주세요."); return; }
+            if (_actions.Any(action => action != null &&
+                (action.Verb == AgentVocabulary.Press || action.Verb == AgentVocabulary.Interact) &&
+                (action.Target == null || _expectedTargets == null || !_expectedTargets.ContainsKey(action.Target))))
+            { Finish(AgentExecutionOutcome.Rejected, "어느 버튼을 누를까요? 이름이나 번호를 알려 주세요."); return; }
+            foreach (var action in _actions)
+                if (action?.Verb == AgentVocabulary.Interact) action.Verb = AgentVocabulary.Press;
             if (_actions.Count > AgentResponseParser.MaxActionsPerTurn)
             { Finish(AgentExecutionOutcome.Rejected, "한 턴 행동 수 초과"); return; }
             if (_actions.Count == 0) { Finish(AgentExecutionOutcome.Completed, "실행할 행동이 없습니다."); return; }
@@ -111,8 +156,11 @@ namespace AgentEscape.VoiceAI
             if (!IsCurrent(id)) return;
             if (_actions[_index]?.Verb == AgentVocabulary.Stop) { Stop(); return; }
             string error = ValidateCurrent();
-            if (error != null) { Finish(AgentExecutionOutcome.Rejected, error); return; }
-            PendingIntent = Describe(_actions[_index]);
+            if (error != null) { CompleteStep(id, AgentExecutionOutcome.Rejected, error); return; }
+            var action = CurrentAction;
+            if (CurrentSource == AgentCommandSource.Player && action.Target != null &&
+                _stage.TryResolve(action.Target, out var selected)) SelectTarget(selected);
+            PendingIntent = Describe(action);
             SetState(AgentExecutionState.Announcing);
             if (!IsCurrent(id)) return;
             AgentEventDispatch.Invoke(IntentAnnounced, PendingIntent);
@@ -135,44 +183,69 @@ namespace AgentEscape.VoiceAI
                     _delay -= deltaTime;
                     if (_delay > 0f) return;
                     string error = ValidateCurrent();
-                    if (error != null) { Finish(AgentExecutionOutcome.Rejected, error); return; }
+                    if (error != null) { CompleteStep(id, AgentExecutionOutcome.Rejected, error); return; }
                     error = _body.BeginAction(_actions[_index], _stage);
-                    if (error != null) { Finish(AgentExecutionOutcome.Failed, error); return; }
+                    if (!IsCurrent(id)) return;
+                    if (error != null) { CompleteStep(id, AgentExecutionOutcome.Failed, error); return; }
                     SetState(AgentExecutionState.Executing);
                     return;
                 }
                 if (State != AgentExecutionState.Executing || !IsCurrent(id)) return;
                 string validation = ValidateCurrent();
-                if (validation != null) { Finish(AgentExecutionOutcome.Rejected, validation); return; }
+                if (validation != null) { CompleteStep(id, AgentExecutionOutcome.Rejected, validation); return; }
                 if (!_body.TickAction(deltaTime, _stage, out string message, out bool success)) return;
-                if (!IsCurrent(id)) return;
-                _body.CancelCurrentAction();
-                if (!IsCurrent(id)) return;
-                var result = Result(success ? AgentExecutionOutcome.Completed : AgentExecutionOutcome.Failed, message);
-                _owner.ReportEvent(message);
-                AgentEventDispatch.Invoke(ActionFinished, result);
-                if (!IsCurrent(id)) return;
-                if (!success) { Finish(AgentExecutionOutcome.Failed, message); return; }
-                if (++_index >= _actions.Count) { Finish(AgentExecutionOutcome.Completed, "명령을 완료했습니다."); return; }
-                PrepareAction(id);
+                CompleteStep(id, success ? AgentExecutionOutcome.Completed : AgentExecutionOutcome.Failed, message);
             }
             catch (Exception e)
             {
-                if (IsCurrent(id)) Finish(AgentExecutionOutcome.Failed, "행동 실행 오류: " + e.Message);
+                if (IsCurrent(id)) CompleteStep(id, AgentExecutionOutcome.Failed, "행동을 실행하는 중 오류가 발생했습니다.");
+                Debug.LogException(e);
             }
+        }
+
+        private void CompleteStep(AgentCommandId id, AgentExecutionOutcome outcome, string message)
+        {
+            if (!IsCurrent(id)) return;
+            var action = CurrentAction;
+            _body?.CancelCurrentAction();
+            if (!IsCurrent(id)) return;
+            if (CurrentSource == AgentCommandSource.Player)
+            {
+                _lastAction = CopyForContext(action);
+                _lastActionSucceeded = outcome == AgentExecutionOutcome.Completed;
+            }
+
+            var result = Result(outcome, message);
+            if (action?.Verb == AgentVocabulary.Speak && outcome == AgentExecutionOutcome.Completed)
+                _owner.Say(message);
+            // 대사에는 사용자 입력이 포함될 수 있으므로 다음 API 요청의 게임 기록에 넣지 않는다.
+            if (!IsCurrent(id)) return;
+            AgentEventDispatch.Invoke(ActionFinished, result);
+            if (!IsCurrent(id)) return;
+            if (outcome != AgentExecutionOutcome.Completed) { Finish(outcome, message); return; }
+            if (++_index >= _actions.Count) { Finish(AgentExecutionOutcome.Completed, "명령을 완료했습니다."); return; }
+            PrepareAction(id);
         }
 
         private string ValidateCurrent()
         {
             if (_body == null || !_body.isActiveAndEnabled) return "활성 AgentBodyController가 없습니다.";
-            var action = _actions[_index];
-            string error = AgentResponseParser.CheckAction(action, _stage.Build(), _owner.Trust);
+            var action = CurrentAction;
+            _validationContext.Inventory = _stage.inventory;
+            _validationContext.Objects.Clear();
+            if (action?.Target != null)
+            {
+                if (!_stage.TryResolve(action.Target, out var actual))
+                    return "지정한 대상을 찾지 못했거나 대상 ID가 중복되었습니다.";
+                if (_expectedTargets != null &&
+                    (!_expectedTargets.TryGetValue(action.Target, out var expected) || expected != actual))
+                    return "선택한 대상이 변경되었거나 비활성화되었습니다.";
+                if (action.Verb == AgentVocabulary.Press && actual.Button == null)
+                    return "누를 수 있는 버튼을 찾지 못했습니다.";
+                _validationContext.Objects.Add(actual.ToStageObject());
+            }
+            string error = AgentResponseParser.CheckAction(action, _validationContext, _owner.Trust);
             if (error != null) return error;
-            if (action.Target != null && !_stage.TryResolve(action.Target, out _))
-                return "실제 대상이 없거나 ID가 중복되었습니다: " + action.Target;
-            if (_hasExpectedTarget && (_expectedTarget == null ||
-                !_stage.TryResolve(action.Target, out var expected) || expected != _expectedTarget || expected.Button == null))
-                return "선택한 버튼이 변경되었거나 비활성화되었습니다.";
             if (CurrentSource == AgentCommandSource.Autonomous)
             {
                 if (action.Verb != AgentVocabulary.MoveTo && action.Verb != AgentVocabulary.Inspect)
@@ -198,8 +271,13 @@ namespace AgentEscape.VoiceAI
                 case AgentVocabulary.PickUp: return target + "을(를) 집겠습니다.";
                 case AgentVocabulary.Drop: return target + "을(를) 내려놓겠습니다.";
                 case AgentVocabulary.MoveDirection:
-                    string direction = action.Direction == "back" ? "뒤" : action.Direction == "left" ? "왼쪽" : action.Direction == "right" ? "오른쪽" : "앞";
-                    return direction + "으로 " + (action.Steps ?? 1) + "걸음 이동하겠습니다.";
+                    string direction = action.Direction == "back" ? "뒤로" : action.Direction == "left" ? "왼쪽으로" :
+                        action.Direction == "right" ? "오른쪽으로" : "앞으로";
+                    string distance = action.Distance.HasValue ? $"{action.Distance:0.##}미터" : $"{action.Steps ?? 1}걸음";
+                    return direction + " " + distance + " 이동하겠습니다.";
+                case AgentVocabulary.Rotate:
+                    return (action.Angle > 0f ? "오른쪽" : "왼쪽") + "으로 돌겠습니다.";
+                case AgentVocabulary.Speak: return "말하겠습니다.";
                 default: return "1초 동안 기다리겠습니다.";
             }
         }
@@ -242,9 +320,14 @@ namespace AgentEscape.VoiceAI
         {
             if (!_active) return;
             var result = Result(outcome, message);
+            if (outcome == AgentExecutionOutcome.Cancelled && CurrentSource == AgentCommandSource.Player &&
+                State == AgentExecutionState.Executing && CurrentAction != null)
+            {
+                _lastAction = CopyForContext(CurrentAction);
+                _lastActionSucceeded = false;
+            }
             _active = false;
-            _expectedTarget = null;
-            _hasExpectedTarget = false;
+            _expectedTargets = null;
             _actions = null;
             PendingIntent = "";
             LastResult = message;

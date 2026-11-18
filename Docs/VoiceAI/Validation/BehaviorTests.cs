@@ -47,8 +47,7 @@ internal static class BehaviorTests
             Stage = host.AddComponent<SceneStageContext>();
             Stage.useDemoObjectsWhenEmpty = false;
             OpenAIKeyProvider.Available = apiAvailable;
-            try { Voice = host.AddComponent<VoiceAgent>(); }
-            finally { OpenAIKeyProvider.Available = true; }
+            Voice = host.AddComponent<VoiceAgent>();
             Body = new GameObject().AddComponent<AgentBodyController>();
             Box = new GameObject().AddComponent<AgentInteractable>();
             Box.id = "red_box"; Box.displayName = "빨간 상자"; Box.allowedVerbs.AddRange(new[] { "pick_up", "drop" });
@@ -642,6 +641,223 @@ internal static class BehaviorTests
             f.Voice.SendChat("아무거나 해");
             f.Tick(5, 100);
             Check(listener.PressCount == 0 && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "API pressed without explicit command");
+        }));
+        await Test("offline Korean movement respects grid size and metric distances", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.commandRouting = AgentCommandRouting.LocalOnly;
+            f.Voice.SendChat("앞으로 한 칸 가"); f.Tick(5, 100);
+            Check(Math.Abs(f.Body.transform.position.z - 1f) < 0.001f, "default grid size was not one");
+            f.Body.stepLength = 0.5f;
+            f.Voice.SendChat("세 걸음 앞으로 가"); f.Tick(5, 100);
+            Check(Math.Abs(f.Body.transform.position.z - 2.5f) < 0.001f, "three steps ignored Inspector grid size");
+            f.Voice.SendChat("앞으로 2미터 가"); f.Tick(5, 100);
+            Check(Math.Abs(f.Body.transform.position.z - 4.5f) < 0.001f, "metric move was scaled by grid");
+            f.Voice.SendChat("조금 뒤로 가"); f.Tick(5, 100);
+            Check(Math.Abs(f.Body.transform.position.z - 4f) < 0.001f && !f.Voice.ApiReady, "short backwards move failed offline");
+        }));
+        await Test("local right and left rotation and movement use body-relative axes", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.SendChat("오른쪽으로 90도 돌아"); f.Tick(5, 100);
+            Check(f.Body.transform.forward.x > 0.99f && f.Body.transform.position.sqrMagnitude == 0f, "right turn failed");
+            f.Voice.SendChat("앞으로 한 칸 가"); f.Tick(5, 100);
+            Check(f.Body.transform.position.x > 0.99f && Math.Abs(f.Body.transform.position.z) < 0.001f, "forward used world axis");
+            f.Voice.SendChat("왼쪽으로 90도 돌아"); f.Tick(5, 100);
+            Check(f.Body.transform.forward.z > 0.99f, "left turn failed");
+        }));
+        await Test("Korean compound move then rotate and immediate mid-move stop", () => Sync(() =>
+        {
+            var f = new Fixture();
+            OpenAIClient.Response = (r, t) => throw new Exception("local command called API");
+            f.Voice.SendChat("앞으로 두 칸 가서 오른쪽으로 돌아"); f.Tick(8, 160);
+            Check(f.Actions.Count == 2 && f.Body.transform.position.z == 2f && f.Body.transform.forward.x > 0.99f,
+                "local sequence did not run in order");
+            f.Voice.SendChat("앞으로 8미터 가"); f.Tick(1.5f, 30);
+            var stoppedAt = f.Body.transform.position;
+            Check(f.Body.IsMoving, "stop fixture never moved");
+            f.Voice.SendChat("앞으로 가다가 멈춰"); f.Tick(5, 100);
+            Check(Vector3.Distance(stoppedAt, f.Body.transform.position) < 0.001f && f.Runner.AutonomySuppressed &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Cancelled, "stop waited or movement resumed");
+        }));
+        await Test("button approach sequence fails at an obstacle before pressing", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var button = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 4));
+            var receiver = button.gameObject.AddComponent<ButtonReceiver>(); button.receiver = receiver;
+            var wall = new GameObject().AddComponent<Collider>();
+            Physics.CapsuleCast = (bottom, top, radius, direction, distance) => wall;
+            f.Voice.SendChat("버튼 앞으로 가서 눌러"); f.Tick(8, 160);
+            Check(f.Actions.Count == 1 && receiver.PressCount == 0 && f.Body.transform.position.sqrMagnitude == 0f &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Failed && f.Endings.Last().Message.Contains("장애물"), "blocked move pressed or passed");
+            Physics.CapsuleCast = null;
+            f.Voice.SendChat("버튼 앞으로 가서 눌러"); f.Tick(8, 160);
+            Check(f.Actions.Count == 3 && receiver.PressCount == 1 &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Completed, "reach then press sequence failed");
+        }));
+        await Test("target selection, pronoun and unique neighboring correction are grounded", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 4));
+            var redReceiver = red.gameObject.AddComponent<ButtonReceiver>(); red.receiver = redReceiver;
+            red.transform.position = new Vector3(0, 0, 5);
+            var blue = CreateButton("blue_button", "파란 버튼", new Vector3(2, 0, 4));
+            var blueReceiver = blue.gameObject.AddComponent<ButtonReceiver>(); blue.receiver = blueReceiver;
+            blue.transform.position = new Vector3(2, 0, 5);
+
+            f.Voice.SendChat("저 버튼으로 가");
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "ambiguous demonstrative moved");
+            f.Voice.SendChat("이제 그거 눌러");
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected, "unresolved pronoun pressed");
+            f.Voice.SendChat("빨간 버튼으로 가"); f.Tick(5, 100);
+            f.Voice.SendChat("이제 그거 눌러"); f.Tick(5, 100);
+            Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 0, "pronoun selected wrong button");
+            f.Voice.SendChat("아니, 옆에 있는 버튼");
+            Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 0, "correction triggered a press");
+            f.Voice.SendChat("이제 그거 눌러"); f.Tick(5, 100);
+            Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 1, "neighbor context was not updated");
+        }));
+        await Test("free-form API route sends strict actions and executes returned motion with metrics", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            JObject request = null;
+            OpenAIClient.Response = (body, token) =>
+            {
+                request = body;
+                var response = Reply(0,
+                    new AgentAction { Verb = AgentVocabulary.MoveDirection, Direction = "forward", Distance = 2f },
+                    new AgentAction { Verb = AgentVocabulary.Rotate, Angle = -90f });
+                response["usage"] = new JObject { ["input_tokens"] = 143, ["output_tokens"] = 40, ["total_tokens"] = 183 };
+                return Task.FromResult(response);
+            };
+            f.Voice.SendChat("두 미터쯤 직진하고 반시계 방향으로 직각만큼 돌아 줘");
+            f.Tick(8, 160);
+            Check(request != null && (bool)request["text"]["format"]["strict"] && !(bool)request["store"],
+                "structured output or storage setting was absent");
+            Check(f.Actions.Count == 2 && f.Body.transform.position.z == 2f && f.Body.transform.forward.x < -0.99f,
+                "mocked structured API actions did not execute");
+            Check(f.Voice.LastApiMetrics?.TotalTokens == 183 &&
+                f.Voice.LastApiMetrics.Outcome == AgentApiOutcome.Completed, "API usage metrics were not captured");
+        }));
+        await Test("APIs can select a real box and receive sanitized command context", () => Sync(() =>
+        {
+            var f = new Fixture();
+            var requests = new List<JObject>();
+            f.Box.gameObject.name = "BoxSceneName";
+            OpenAIClient.Response = (request, token) =>
+            {
+                requests.Add(request);
+                return Task.FromResult(requests.Count == 1 ? Reply(0, new AgentAction
+                { Verb = AgentVocabulary.MoveTo, Target = f.Box.id }) : Reply());
+            };
+            f.Voice.SendChat("저 상자 앞까지 가"); f.Tick(5, 100);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Completed && f.Body.transform.position.z > 3f,
+                "API target movement failed");
+            f.Voice.SendChat("장면 상태를 알려 줘");
+            string context = (string)requests[1]["input"][0]["content"];
+            Check(context.Contains("BoxSceneName") && context.Contains("월드 위치") &&
+                context.Contains("직전에 선택한 대상 ID: red_box") && context.Contains("마지막 행동") && context.Contains("성공") &&
+                !requests[1]["input"].ToString().Contains("저 상자 앞까지 가"), "scene metadata or action context missing");
+        }));
+        await Test("partially matching local grammar falls through to grounded API interaction", () => Sync(() =>
+        {
+            var f = new Fixture();
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 3));
+            var redReceiver = red.gameObject.AddComponent<ButtonReceiver>(); red.receiver = redReceiver;
+            int calls = 0;
+            OpenAIClient.Response = (request, token) =>
+            {
+                ++calls;
+                return Task.FromResult(Reply(0, new AgentAction { Verb = AgentVocabulary.MoveTo, Target = "red_button" },
+                    new AgentAction { Verb = AgentVocabulary.Interact, Target = "red_button" }));
+            };
+            f.Voice.SendChat("부탁인데 빨간 버튼 눌러"); f.Tick(8, 160);
+            Check(calls == 1 && redReceiver.PressCount == 1 && f.Actions.Count == 2, "local miss did not reach safe API execution");
+        }));
+        await Test("API rejects ambiguous, invented and out-of-bounds plans atomically", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(0, 0, 4));
+            var redReceiver = red.gameObject.AddComponent<ButtonReceiver>(); red.receiver = redReceiver;
+            var blue = CreateButton("blue_button", "파란 버튼", new Vector3(2, 0, 4));
+            blue.receiver = blue.gameObject.AddComponent<ButtonReceiver>();
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.Interact, Target = "red_button" }));
+            f.Voice.SendChat("버튼을 눌러 줄래"); f.Tick(5, 100);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected && redReceiver.PressCount == 0,
+                "API guessed between buttons");
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                Move(1), new AgentAction { Verb = AgentVocabulary.Interact, Target = "invented_button" }));
+            f.Voice.SendChat("없는 버튼 눌러"); f.Tick(5, 100);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected && f.Body.transform.position.sqrMagnitude == 0,
+                "invented target let a partial sequence execute");
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.MoveDirection, Direction = "forward", Distance = 50f },
+                new AgentAction { Verb = AgentVocabulary.Rotate, Angle = 200f }));
+            f.Voice.SendChat("길게 직진한 뒤 여러 바퀴 돌아"); f.Tick(5, 100);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected && f.Actions.Count == 0,
+                "unsafe distance or rotation executed");
+        }));
+        await Test("API errors and missing key have distinct notices and no movement", () => Sync(() =>
+        {
+            var missing = new Fixture(apiAvailable: false);
+            missing.Voice.SendChat("오늘 임무의 상황을 알려 줄래?");
+            Check(missing.Endings.Last().Message.Contains("키") && !missing.Voice.ApiReady, "missing API key was not distinguished");
+
+            var f = new Fixture();
+            OpenAIClient.Response = (request, token) =>
+                Task.FromException<JObject>(new AgentApiException("OpenAI 요청 한도에 도달했습니다."));
+            f.Voice.SendChat("오늘 임무의 상황을 알려 줄래?");
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Failed &&
+                f.Endings.Last().Message.Contains("한도") && f.Voice.LastApiMetrics?.Outcome == AgentApiOutcome.Failed &&
+                !f.Runner.ExplorationEnabled && f.Body.transform.position.sqrMagnitude == 0,
+                "failed API call was reported as a successful action");
+        }));
+        await Test("API spatial selection must agree with the robot heading and live scene", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            var red = CreateButton("red_button", "빨간 버튼", new Vector3(-2, 0, 3));
+            var redReceiver = red.gameObject.AddComponent<ButtonReceiver>(); red.receiver = redReceiver;
+            red.transform.position = new Vector3(-2, 0, 4);
+            var blue = CreateButton("blue_button", "파란 버튼", new Vector3(2, 0, 3));
+            var blueReceiver = blue.gameObject.AddComponent<ButtonReceiver>(); blue.receiver = blueReceiver;
+            blue.transform.position = new Vector3(2, 0, 4);
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.Interact, Target = "red_button" }));
+            f.Voice.SendChat("오른쪽에 있는 버튼 좀 눌러"); f.Tick(5, 100);
+            Check(redReceiver.PressCount == 0 && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected,
+                "wrong side button was allowed");
+            OpenAIClient.Response = (request, token) => Task.FromResult(Reply(0,
+                new AgentAction { Verb = AgentVocabulary.Interact, Target = "blue_button" }));
+            f.Voice.SendChat("오른쪽에 있는 버튼 좀 눌러"); f.Tick(5, 100);
+            Check(blueReceiver.PressCount == 1 && f.Endings.Last().Outcome == AgentExecutionOutcome.Completed,
+                "unique right-side scene button was not pressed");
+        }));
+        await Test("replacement API request records the interrupted action and orders wait then speak", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.SendChat("앞으로 5미터 가"); f.Tick(1.5f, 30);
+            Check(f.Body.IsMoving, "context fixture did not move");
+            string state = null;
+            var notices = new List<string>();
+            f.Voice.LocalNotice += notices.Add;
+            f.Runner.intentDelaySeconds = 0f;
+            OpenAIClient.Response = (request, token) =>
+            {
+                state = (string)request["input"][0]["content"];
+                return Task.FromResult(Reply(0, new AgentAction { Verb = AgentVocabulary.Wait },
+                    new AgentAction { Verb = AgentVocabulary.Speak, Text = "준비됐습니다." }));
+            };
+            f.Voice.SendChat("잠시 기다렸다 준비됐다고 말해 줘");
+            f.Tick(0.5f, 10);
+            Check(notices.Count == 0 && f.Actions.Count == 0, "speak ran before wait");
+            f.Tick(2, 40);
+            Check(f.Actions.Count == 2 && notices.Single().Contains("준비됐습니다") &&
+                state.Contains("진행 중인 행동: move_direction") && state.Contains("마지막 행동: move_direction") &&
+                state.Contains("/ 실패"), "interrupted context or wait/speak ordering failed");
         }));
         Console.WriteLine($"TOTAL: {_passed} passed, {_failed} failed, {_skipped} skipped. Unity Play Mode NOT executed.");
         return _failed == 0 ? 0 : 1;

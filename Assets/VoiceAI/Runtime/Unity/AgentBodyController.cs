@@ -9,10 +9,18 @@ namespace AgentEscape.VoiceAI
         public VoiceAgent voiceAgent;
         public float moveSpeed = 3f;
         public float turnSpeed = 540f;
+        [Min(0.01f), Tooltip("한 칸 또는 한 걸음의 Unity unit 거리입니다.")]
         public float stepLength = 1f;
         public float stopDistance = 1.2f;
         public float carryHeight = 1f;
         [Min(1f)] public float actionTimeoutSeconds = 30f;
+
+        [Header("이동 장애물 검사")]
+        public LayerMask obstacleLayers = Physics.DefaultRaycastLayers;
+        [Min(0.05f)] public float obstacleRadius = 0.35f;
+        [Min(0.1f)] public float obstacleHeight = 2f;
+        [Tooltip("로봇 루트에서 충돌 검사용 캡슐의 아래쪽까지의 높이입니다.")]
+        public float obstacleBottomOffset = 0.05f;
 
         /// <summary>실제 위치 갱신 직후의 deltaTime. 0은 즉시 정지/기준점 초기화를 뜻한다.</summary>
         public event System.Action<float> MotionUpdated;
@@ -24,7 +32,10 @@ namespace AgentEscape.VoiceAI
         private AgentButton _button;
         private bool _moving;
         private float _remainingWait;
+        private float _remainingAngle;
         private float _elapsed;
+        private readonly Collider[] _overlaps = new Collider[16];
+        private readonly RaycastHit[] _hits = new RaycastHit[16];
 
         private void Awake()
         {
@@ -58,6 +69,7 @@ namespace AgentEscape.VoiceAI
             _target = null;
             _button = null;
             _moving = false;
+            _remainingAngle = 0f;
             AgentEventDispatch.Invoke(MotionUpdated, 0f);
         }
 
@@ -67,13 +79,34 @@ namespace AgentEscape.VoiceAI
             _action = AgentCommandRules.Copy(action);
             _elapsed = 0f;
             _remainingWait = 1f;
-            if (action.Verb == AgentVocabulary.Wait) return null;
+            if (action.Verb == AgentVocabulary.Wait || action.Verb == AgentVocabulary.Speak) return null;
+            if (action.Verb == AgentVocabulary.Rotate)
+            {
+                _remainingAngle = action.Angle ?? 0f;
+                if (!IsFinite(_remainingAngle) || _remainingAngle == 0f ||
+                    System.Math.Abs(_remainingAngle) > AgentResponseParser.MaxRotationDegrees)
+                    return "회전 각도가 허용 범위를 벗어났습니다.";
+                return TurningError();
+            }
             if (action.Verb == AgentVocabulary.MoveDirection)
             {
-                Vector3 axis = action.Direction == "back" ? -transform.forward :
-                    action.Direction == "left" ? -transform.right :
-                    action.Direction == "right" ? transform.right : transform.forward;
-                _destination = transform.position + axis * (Mathf.Max(0.01f, stepLength) * (action.Steps ?? 1));
+                // 각 단계가 시작되는 시점의 로봇 방향을 수평면에 투영한다.
+                Vector3 axis = transform.forward;
+                axis.y = 0f;
+                if (axis.sqrMagnitude < 0.0001f) return "로봇의 수평 방향을 확인할 수 없습니다.";
+                axis = axis.normalized;
+                switch (action.Direction)
+                {
+                    case "forward": break;
+                    case "back": axis = -axis; break;
+                    case "left": axis = new Vector3(-axis.z, 0f, axis.x); break;
+                    case "right": axis = new Vector3(axis.z, 0f, -axis.x); break;
+                    default: return "이동 방향을 확인할 수 없습니다.";
+                }
+                float travel = action.Distance ?? stepLength * (action.Steps ?? 1);
+                if (!IsFinite(travel) || travel <= 0f || travel > AgentResponseParser.MaxDistance)
+                    return "이동 거리가 허용 범위를 벗어났습니다.";
+                _destination = transform.position + axis * travel;
                 _moving = true;
                 return MovementError();
             }
@@ -104,8 +137,45 @@ namespace AgentEscape.VoiceAI
             return _moving ? MovementError() : null;
         }
 
-        private string MovementError() => moveSpeed <= 0f || float.IsNaN(moveSpeed) || float.IsInfinity(moveSpeed)
-            ? "이동 속도는 유한한 양수여야 합니다." : null;
+        private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        private string MovementError()
+        {
+            if (!IsFinite(moveSpeed) || moveSpeed <= 0f) return "이동 속도는 유한한 양수여야 합니다.";
+            if (!IsFinite(obstacleRadius) || !IsFinite(obstacleHeight) || !IsFinite(obstacleBottomOffset) ||
+                obstacleRadius <= 0f || obstacleHeight < obstacleRadius * 2f)
+                return "이동 장애물 검사 크기가 올바르지 않습니다.";
+            return null;
+        }
+
+        private string TurningError() => !IsFinite(turnSpeed) || turnSpeed <= 0f
+            ? "회전 속도는 유한한 양수여야 합니다." : null;
+
+        private bool IsObstacle(Collider collider) => collider != null &&
+            collider.transform != transform && !collider.transform.IsChildOf(transform);
+
+        private bool IsPathBlocked(Vector3 displacement)
+        {
+            float distance = displacement.magnitude;
+            if (distance <= 0f) return false;
+            Vector3 bottom = transform.position + Vector3.up * (obstacleBottomOffset + obstacleRadius);
+            Vector3 top = transform.position + Vector3.up * (obstacleBottomOffset + obstacleHeight - obstacleRadius);
+            // 물리 틱 이후 이동한 씬 오브젝트의 위치를 검사에 반영한다.
+            Physics.SyncTransforms();
+            // 이미 겹친 장애물을 별도로 확인한 뒤 이번 프레임의 이동 구간을 검사한다.
+            int overlaps = Physics.OverlapCapsuleNonAlloc(bottom, top, obstacleRadius, _overlaps,
+                obstacleLayers, QueryTriggerInteraction.Ignore);
+            if (overlaps == _overlaps.Length) return true;
+            for (int index = 0; index < overlaps; index++)
+                if (IsObstacle(_overlaps[index])) return true;
+
+            int hits = Physics.CapsuleCastNonAlloc(bottom, top, obstacleRadius, displacement / distance, _hits,
+                distance, obstacleLayers, QueryTriggerInteraction.Ignore);
+            if (hits == _hits.Length) return true;
+            for (int index = 0; index < hits; index++)
+                if (IsObstacle(_hits[index].collider)) return true;
+            return false;
+        }
 
         // Runner가 최신 상태 검증 후 프레임마다 한 번 호출한다. true면 행동 종료.
         public bool TickAction(float deltaTime, SceneStageContext stage, out string message, out bool success)
@@ -121,16 +191,37 @@ namespace AgentEscape.VoiceAI
                 if (_remainingWait > 0f) return false;
                 success = true; message = "기다리기를 마쳤습니다."; return true;
             }
+            if (_action.Verb == AgentVocabulary.Speak)
+            {
+                success = true;
+                message = _action.Text;
+                return true;
+            }
+            if (_action.Verb == AgentVocabulary.Rotate)
+            {
+                message = TurningError();
+                if (message != null) return true;
+                float remaining = Mathf.MoveTowards(_remainingAngle, 0f, turnSpeed * deltaTime);
+                transform.rotation = Quaternion.AngleAxis(_remainingAngle - remaining, Vector3.up) * transform.rotation;
+                _remainingAngle = remaining;
+                if (_remainingAngle != 0f) return false;
+                success = true;
+                message = "회전을 마쳤습니다.";
+                return true;
+            }
             if (_action.Target != null && (_target == null || !stage.TryResolve(_action.Target, out var current) || current != _target))
             { message = "행동 중 대상이 변경되었습니다."; return true; }
             if (_moving)
             {
                 message = MovementError();
                 if (message != null) return true;
+                Vector3 nextPosition = Vector3.MoveTowards(transform.position, _destination, moveSpeed * deltaTime);
+                if (IsPathBlocked(nextPosition - transform.position))
+                { message = "이동 경로에 장애물이 있습니다."; return true; }
                 Vector3 direction = _destination - transform.position;
-                if (direction.sqrMagnitude > 0.0001f)
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), Mathf.Max(0f, turnSpeed) * deltaTime);
-                transform.position = Vector3.MoveTowards(transform.position, _destination, moveSpeed * deltaTime);
+                if (direction.sqrMagnitude > 0.0001f && IsFinite(turnSpeed) && turnSpeed > 0f)
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), turnSpeed * deltaTime);
+                transform.position = nextPosition;
                 AgentEventDispatch.Invoke(MotionUpdated, deltaTime);
                 if ((_destination - transform.position).sqrMagnitude > 0.0001f) return false;
                 _moving = false;

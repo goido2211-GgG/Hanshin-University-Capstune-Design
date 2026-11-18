@@ -28,9 +28,10 @@ namespace AgentEscape.VoiceAI
             return target != null;
         }
 
-        internal string ResolveButton(string selector, out AgentInteractable target)
+        internal string ResolveButton(string selector, out AgentInteractable target, out bool noMatch)
         {
             target = null;
+            noMatch = false;
             GameObject match = null;
             foreach (var candidate in GameObject.FindGameObjectsWithTag(AgentButton.Tag))
             {
@@ -45,7 +46,7 @@ namespace AgentEscape.VoiceAI
                 if (match != null) return "버튼이 여러 개입니다. 고유한 이름이나 번호를 입력해 주세요.";
                 match = candidate;
             }
-            if (match == null) return "일치하는 버튼이 없습니다: " + selector;
+            if (match == null) { noMatch = true; return "지정한 버튼을 찾지 못했습니다."; }
             if (!match.TryGetComponent<AgentInteractable>(out var selected) ||
                 !selected.isActiveAndEnabled || selected.Button == null || string.IsNullOrWhiteSpace(selected.id))
                 return "버튼 어댑터 또는 고유 ID가 설정되지 않았습니다: " + match.name;
@@ -54,7 +55,33 @@ namespace AgentEscape.VoiceAI
             return null;
         }
 
-        public StageContext Build()
+        internal string ResolveNeighborButton(AgentInteractable selected, out AgentInteractable target)
+        {
+            const float neighborRadius = 3f;
+            target = null;
+            if (selected == null || selected.Button == null)
+                return "어느 버튼의 옆인지 먼저 이름이나 번호를 알려 주세요.";
+            foreach (var candidate in AgentInteractable.Active)
+            {
+                if (candidate == null || candidate == selected || candidate.Button == null ||
+                    Vector3.Distance(selected.transform.position, candidate.transform.position) > neighborRadius ||
+                    string.IsNullOrWhiteSpace(candidate.id) || !TryResolve(candidate.id, out var unique) || unique != candidate)
+                    continue;
+                if (target != null)
+                {
+                    target = null;
+                    return "옆에 버튼이 여러 개 있습니다. 이름이나 번호를 알려 주세요.";
+                }
+                target = candidate;
+            }
+            return target != null ? null : "선택한 버튼 옆에 다른 버튼을 찾지 못했습니다.";
+        }
+
+        public StageContext Build() => Build(includeDemo: true, includeSceneDetails: false);
+
+        internal StageContext BuildForCommand() => Build(includeDemo: false, includeSceneDetails: true);
+
+        private StageContext Build(bool includeDemo, bool includeSceneDetails)
         {
             var context = new StageContext
             {
@@ -65,25 +92,51 @@ namespace AgentEscape.VoiceAI
                 Inventory = new List<string>(inventory)
             };
 
-            var seen = new HashSet<string>();
+            var items = new Dictionary<string, AgentInteractable>(System.StringComparer.Ordinal);
             foreach (var item in AgentInteractable.Active)
             {
                 if (item == null || !item.isActiveAndEnabled || item.gameObject.scene != gameObject.scene) continue;
-                if (string.IsNullOrEmpty(item.id))
+                if (string.IsNullOrWhiteSpace(item.id))
                 {
                     Debug.LogWarning("[VoiceAI] ID가 비어 있는 AgentInteractable: " + item.name, item);
                 }
-                else if (!seen.Add(item.id))
+                else if (items.ContainsKey(item.id))
                 {
                     Debug.LogWarning("[VoiceAI] 중복된 오브젝트 ID: " + item.id, item);
+                    items[item.id] = null;
                 }
                 else
                 {
-                    context.Objects.Add(item.ToStageObject());
+                    items.Add(item.id, item);
                 }
             }
 
-            if (context.Objects.Count == 0 && useDemoObjectsWhenEmpty) AddDemoObjects(context);
+            foreach (var item in items.Values)
+            {
+                if (item == null) continue;
+                var description = item.ToStageObject();
+                if (includeSceneDetails)
+                {
+                    var position = item.transform.position;
+                    description.SceneName = item.gameObject.name;
+                    description.PositionX = position.x;
+                    description.PositionY = position.y;
+                    description.PositionZ = position.z;
+                    var button = item.Button;
+                    if (button != null)
+                    {
+                        description.Aliases.AddRange(button.aliases);
+                        description.CanInteract = button.ConfigurationError() == null;
+                    }
+                    else
+                    {
+                        description.AllowedVerbs.Remove(AgentVocabulary.Press);
+                        description.AllowedVerbs.Remove(AgentVocabulary.Interact);
+                    }
+                }
+                context.Objects.Add(description);
+            }
+            if (includeDemo && items.Count == 0 && useDemoObjectsWhenEmpty) AddDemoObjects(context);
             return context;
         }
 
