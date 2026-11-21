@@ -1,6 +1,5 @@
 {
   "dependencies": {
-<<<<<<< Updated upstream
     "com.unity.2d.sprite": {
       "version": "1.0.0",
       "depth": 0,
@@ -10,11 +9,6 @@
     "com.unity.burst": {
       "version": "1.8.30",
       "depth": 2,
-=======
-    "com.unity.burst": {
-      "version": "1.8.30",
-      "depth": 3,
->>>>>>> Stashed changes
       "source": "registry",
       "dependencies": {
         "com.unity.mathematics": "1.2.1",
@@ -34,11 +28,7 @@
     },
     "com.unity.collections": {
       "version": "2.6.8",
-<<<<<<< Updated upstream
       "depth": 2,
-=======
-      "depth": 3,
->>>>>>> Stashed changes
       "source": "registry",
       "dependencies": {
         "com.unity.burst": "1.8.29",
@@ -51,7 +41,6 @@
     },
     "com.unity.ext.nunit": {
       "version": "2.0.5",
-<<<<<<< Updated upstream
       "depth": 4,
       "source": "builtin",
       "dependencies": {}
@@ -63,12 +52,6 @@
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
-=======
-      "depth": 5,
-      "source": "builtin",
-      "dependencies": {}
-    },
->>>>>>> Stashed changes
     "com.unity.inputsystem": {
       "version": "1.20.1",
       "depth": 0,
@@ -95,52 +78,21 @@
     },
     "com.unity.nuget.mono-cecil": {
       "version": "1.11.6",
-<<<<<<< Updated upstream
       "depth": 3,
-=======
-      "depth": 4,
->>>>>>> Stashed changes
       "source": "registry",
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
-<<<<<<< Updated upstream
     "com.unity.nuget.newtonsoft-json": {
       "version": "3.2.2",
       "depth": 0,
       "source": "registry",
       "dependencies": {},
-=======
-    "com.unity.postprocessing": {
-      "version": "3.5.4",
-      "depth": 0,
-      "source": "registry",
-      "dependencies": {
-        "com.unity.modules.imgui": "1.0.0",
-        "com.unity.modules.physics": "1.0.0"
-      },
-      "url": "https://packages.unity.com"
-    },
-    "com.unity.probuilder": {
-      "version": "6.1.4",
-      "depth": 0,
-      "source": "registry",
-      "dependencies": {
-        "com.unity.shadergraph": "17.0.3",
-        "com.unity.modules.imgui": "1.0.0",
-        "com.unity.modules.physics": "1.0.0",
-        "com.unity.settings-manager": "1.0.3"
-      },
->>>>>>> Stashed changes
       "url": "https://packages.unity.com"
     },
     "com.unity.render-pipelines.core": {
       "version": "17.3.0",
-<<<<<<< Updated upstream
       "depth": 1,
-=======
-      "depth": 2,
->>>>>>> Stashed changes
       "source": "builtin",
       "dependencies": {
         "com.unity.burst": "1.8.14",
@@ -152,7 +104,6 @@
         "com.unity.modules.jsonserialize": "1.0.0"
       }
     },
-<<<<<<< Updated upstream
     "com.unity.render-pipelines.universal": {
       "version": "17.3.0",
       "depth": 0,
@@ -180,25 +131,11 @@
     },
     "com.unity.settings-manager": {
       "version": "2.1.1",
-=======
-    "com.unity.searcher": {
-      "version": "4.9.5",
->>>>>>> Stashed changes
       "depth": 2,
       "source": "registry",
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
-<<<<<<< Updated upstream
-=======
-    "com.unity.settings-manager": {
-      "version": "2.1.1",
-      "depth": 1,
-      "source": "registry",
-      "dependencies": {},
-      "url": "https://packages.unity.com"
-    },
->>>>>>> Stashed changes
     "com.unity.shadergraph": {
       "version": "17.3.0",
       "depth": 1,
@@ -221,11 +158,7 @@
     },
     "com.unity.test-framework": {
       "version": "1.6.0",
-<<<<<<< Updated upstream
       "depth": 3,
-=======
-      "depth": 4,
->>>>>>> Stashed changes
       "source": "builtin",
       "dependencies": {
         "com.unity.ext.nunit": "2.0.3",
@@ -235,11 +168,7 @@
     },
     "com.unity.test-framework.performance": {
       "version": "3.5.0",
-<<<<<<< Updated upstream
       "depth": 3,
-=======
-      "depth": 4,
->>>>>>> Stashed changes
       "source": "registry",
       "dependencies": {
         "com.unity.test-framework": "1.1.33",
@@ -249,11 +178,7 @@
     },
     "com.unity.ugui": {
       "version": "2.0.0",
-<<<<<<< Updated upstream
       "depth": 0,
-=======
-      "depth": 3,
->>>>>>> Stashed changes
       "source": "builtin",
       "dependencies": {
         "com.unity.modules.ui": "1.0.0",
