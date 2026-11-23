@@ -16,6 +16,10 @@ namespace AgentEscape.VoiceAI
         public string id;
         [Tooltip("플레이어가 부를 이름. 음성 인식 힌트로도 쓰인다. 예: 출구 문")]
         public string displayName;
+        [Tooltip("이름과 ID 외에 플레이어가 이 오브젝트를 부르는 이름")]
+        public List<string> aliases = new List<string>();
+        [Tooltip("오브젝트의 지정 색상. 예: 빨간색, blue. 비워 두면 색상을 지정하지 않습니다.")]
+        public string color;
         [TextArea] public string description;
         [Tooltip("현재 상태. 기믹 코드에서 바꾼다. 예: 잠김")]
         public string state;
@@ -33,17 +37,25 @@ namespace AgentEscape.VoiceAI
         private void OnEnable() { if (!ActiveItems.Contains(this)) ActiveItems.Add(this); }
         private void OnDisable() { ActiveItems.Remove(this); }
 
+        internal AgentButton Button => CompareTag(AgentButton.Tag) &&
+            TryGetComponent<AgentButton>(out var button) && button.isActiveAndEnabled ? button : null;
+
         public StageObject ToStageObject()
         {
-            return new StageObject
+            var verbs = new List<string>(allowedVerbs);
+            if (Button != null && !verbs.Contains(AgentVocabulary.Press)) verbs.Add(AgentVocabulary.Press);
+            var item = new StageObject
             {
                 Id = id,
                 DisplayName = displayName,
+                Color = color,
                 Description = description,
                 State = state,
-                AllowedVerbs = new List<string>(allowedVerbs),
+                AllowedVerbs = verbs,
                 MinTrust = minTrust
             };
+            if (aliases != null) item.Aliases.AddRange(aliases);
+            return item;
         }
     }
 }

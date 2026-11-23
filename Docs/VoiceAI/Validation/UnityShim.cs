@@ -21,6 +21,8 @@ namespace UnityEngine
         {
             foreach (var behaviour in Components.OfType<Behaviour>().ToArray()) behaviour.enabled = false;
             Components.Clear();
+            Physics.CapsuleCast = null;
+            Physics.CapsuleOverlap = null;
         }
     }
     public enum FindObjectsSortMode { None }
@@ -29,6 +31,19 @@ namespace UnityEngine
         public GameObject gameObject;
         public Transform transform => gameObject.transform;
         public T GetComponent<T>() where T : Component => gameObject.GetComponent<T>();
+        public T GetComponentInParent<T>() where T : Component
+        {
+            for (var current = transform; current != null; current = current.parent)
+            {
+                var match = Components.OfType<T>().FirstOrDefault(item => item.transform == current);
+                if (match != null) return match;
+            }
+            return null;
+        }
+        public T[] GetComponentsInChildren<T>(bool includeInactive) where T : Component =>
+            Components.OfType<T>().Where(item => item.transform == transform || item.transform.IsChildOf(transform)).ToArray();
+        public bool TryGetComponent<T>(out T component) where T : Component => gameObject.TryGetComponent(out component);
+        public bool CompareTag(string tag) => gameObject.tag == tag;
     }
     public class Behaviour : Component
     {
@@ -45,6 +60,16 @@ namespace UnityEngine
     {
         private readonly List<Component> _components = new List<Component>();
         public int scene = 1;
+        public int layer;
+        public bool activeInHierarchy => true;
+        public string tag = "Untagged";
+        public static GameObject[] FindGameObjectsWithTag(string tag) =>
+            Components.Select(c => c.gameObject).Distinct().Where(g => g.tag == tag).ToArray();
+        public bool TryGetComponent<T>(out T component) where T : Component
+        {
+            component = GetComponent<T>();
+            return component != null;
+        }
         public readonly Transform transform = new Transform();
         public T AddComponent<T>() where T : Component, new()
         {
@@ -57,19 +82,29 @@ namespace UnityEngine
     }
     public class Transform
     {
-        public Vector3 position;
+        public Transform parent { get; private set; }
+        public Vector3 localPosition { get; set; }
+        public Vector3 position
+        {
+            get => (parent?.position ?? default) + localPosition;
+            set => localPosition = value - (parent?.position ?? default);
+        }
         public Quaternion rotation;
-        private Transform _parent;
-        public Vector3 localPosition { set { position = (_parent?.position ?? new Vector3()) + value; } }
         public Vector3 forward => rotation.Forward.sqrMagnitude > 0f ? rotation.Forward : new Vector3(0, 0, 1);
         public Vector3 right => new Vector3(forward.z, 0, -forward.x);
-        public void SetParent(Transform parent, bool worldPositionStays) => _parent = parent;
-        public bool IsChildOf(Transform target) => _parent != null && (_parent == target || _parent.IsChildOf(target));
+        public void SetParent(Transform newParent, bool worldPositionStays)
+        {
+            Vector3 worldPosition = position;
+            parent = newParent;
+            if (worldPositionStays) position = worldPosition;
+        }
+        public bool IsChildOf(Transform target) => parent != null && (parent == target || parent.IsChildOf(target));
     }
     public struct Vector3
     {
         public float x, y, z;
         public Vector3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
+        public static float Distance(Vector3 first, Vector3 second) => (first - second).magnitude;
         public static Vector3 up => new Vector3(0, 1, 0);
         public float sqrMagnitude => x * x + y * y + z * z;
         public float magnitude => (float)Math.Sqrt(sqrMagnitude);
@@ -78,6 +113,7 @@ namespace UnityEngine
         public static Vector3 operator -(Vector3 a, Vector3 b) => new Vector3(a.x - b.x, a.y - b.y, a.z - b.z);
         public static Vector3 operator -(Vector3 a) => a * -1;
         public static Vector3 operator *(Vector3 a, float b) => new Vector3(a.x * b, a.y * b, a.z * b);
+        public static Vector3 operator /(Vector3 a, float b) => new Vector3(a.x / b, a.y / b, a.z / b);
         public static Vector3 MoveTowards(Vector3 a, Vector3 b, float amount) =>
             (b - a).magnitude <= amount ? b : a + (b - a).normalized * amount;
     }
@@ -86,6 +122,75 @@ namespace UnityEngine
         public Vector3 Forward;
         public static Quaternion LookRotation(Vector3 direction) => new Quaternion { Forward = direction.normalized };
         public static Quaternion RotateTowards(Quaternion a, Quaternion b, float amount) => b;
+        // Body의 Y축 회전만 표현한다.
+        public static Quaternion AngleAxis(float angle, Vector3 axis)
+        {
+            double radians = angle * axis.y * Math.PI / 180;
+            return new Quaternion { Forward = new Vector3((float)Math.Sin(radians), 0f, (float)Math.Cos(radians)) };
+        }
+        public static Quaternion operator *(Quaternion left, Quaternion right)
+        {
+            Vector3 a = left.Forward.sqrMagnitude > 0f ? left.Forward : new Vector3(0, 0, 1);
+            Vector3 b = right.Forward.sqrMagnitude > 0f ? right.Forward : new Vector3(0, 0, 1);
+            return new Quaternion { Forward = new Vector3(a.z * b.x + a.x * b.z, b.y, a.z * b.z - a.x * b.x) };
+        }
+    }
+    public enum QueryTriggerInteraction { UseGlobal, Ignore, Collide }
+    public struct LayerMask
+    {
+        public int value;
+        public static implicit operator int(LayerMask mask) => mask.value;
+        public static implicit operator LayerMask(int value) => new LayerMask { value = value };
+    }
+    public class Collider : Component
+    {
+        public bool isTrigger;
+        public bool enabled = true;
+        public Bounds bounds => new Bounds(transform.position, new Vector3(0.5f, 0.5f, 0.5f));
+    }
+    public struct Bounds
+    {
+        public Vector3 center;
+        public Vector3 extents;
+        public Bounds(Vector3 center, Vector3 size) { this.center = center; extents = size * 0.5f; }
+    }
+    public class Rigidbody : Component
+    {
+        public bool isKinematic;
+    }
+    public struct RaycastHit
+    {
+        public Collider collider;
+    }
+    public static class Physics
+    {
+        public const int DefaultRaycastLayers = ~(1 << 2);
+        public static Func<Vector3, Vector3, float, Vector3, float, Collider> CapsuleCast;
+        public static Func<Vector3, Vector3, float, Collider> CapsuleOverlap;
+
+        public static void SyncTransforms() { }
+
+        public static int OverlapCapsuleNonAlloc(Vector3 bottom, Vector3 top, float radius, Collider[] results,
+            int layers, QueryTriggerInteraction triggers)
+        {
+            var collider = CapsuleOverlap?.Invoke(bottom, top, radius);
+            if (!IsQueryable(collider, layers, triggers)) return 0;
+            results[0] = collider;
+            return 1;
+        }
+
+        public static int CapsuleCastNonAlloc(Vector3 bottom, Vector3 top, float radius, Vector3 direction,
+            RaycastHit[] results, float distance, int layers, QueryTriggerInteraction triggers)
+        {
+            var collider = CapsuleCast?.Invoke(bottom, top, radius, direction, distance);
+            if (!IsQueryable(collider, layers, triggers)) return 0;
+            results[0] = new RaycastHit { collider = collider };
+            return 1;
+        }
+
+        private static bool IsQueryable(Collider collider, int layers, QueryTriggerInteraction triggers) =>
+            collider != null && collider.enabled && (layers & (1 << collider.gameObject.layer)) != 0 &&
+            (triggers != QueryTriggerInteraction.Ignore || !collider.isTrigger);
     }
     public static class Mathf
     {
@@ -135,16 +240,40 @@ namespace UnityEngine
     [AttributeUsage(AttributeTargets.Method)] public class ContextMenu : Attribute { public ContextMenu(string name) { } }
     [AttributeUsage(AttributeTargets.Class)] public class RequireComponent : Attribute { public RequireComponent(Type type) { } }
     [AttributeUsage(AttributeTargets.Field)] public class Min : Attribute { public Min(float value) { } }
-    [AttributeUsage(AttributeTargets.Field)] public class Range : Attribute { public Range(float min, float max) { } }
+    [AttributeUsage(AttributeTargets.Field)] public class RangeAttribute : Attribute { public RangeAttribute(float min, float max) { } }
     [AttributeUsage(AttributeTargets.Field)] public class Tooltip : Attribute { public Tooltip(string value) { } }
     [AttributeUsage(AttributeTargets.Field)] public class Header : Attribute { public Header(string value) { } }
     [AttributeUsage(AttributeTargets.Field)] public class TextArea : Attribute { public TextArea(int min = 0, int max = 0) { } }
 }
 
+namespace UnityEngine.Events
+{
+    public enum UnityEventCallState { Off, EditorAndRuntime, RuntimeOnly }
+    public class UnityEventBase
+    {
+        public static MethodInfo GetValidMethodInfo(object target, string name, Type[] types) =>
+            target.GetType().GetMethod(name, types);
+    }
+    public class UnityEvent : UnityEventBase
+    {
+        private Action _listener;
+        public void SetTestPersistentListener(Action listener) => _listener = listener;
+        public int GetPersistentEventCount() => _listener == null ? 0 : 1;
+        public Object GetPersistentTarget(int index) => (Object)_listener.Target;
+        public UnityEventCallState GetPersistentListenerState(int index) => UnityEventCallState.RuntimeOnly;
+        public string GetPersistentMethodName(int index) => _listener.Method.Name;
+        public void Invoke() => _listener?.Invoke();
+    }
+}
+
 namespace AgentEscape.VoiceAI
 {
     // 실제 키 파일·마이크·네트워크에는 접근하지 않는다.
-    public static class OpenAIKeyProvider { public static string Load() => "unused-test-placeholder"; }
+    public static class OpenAIKeyProvider
+    {
+        public static bool Available = true;
+        public static string Load() => Available ? "unused-test-placeholder" : throw new InvalidOperationException("No test API key");
+    }
     public sealed class RecordedAudio { public byte[] Wav; public float Seconds; public float Rms; }
     public sealed class MicrophoneRecorder
     {
