@@ -144,7 +144,9 @@ public class Interactor : MonoBehaviour
         Keyboard keyboard = Keyboard.current;
         if (current != null && keyboard != null && keyboard.fKey.wasPressedThisFrame)
         {
-            current.Interact();
+            // ★ 변경: 누가 눌렀는지(role: 플레이어/드론)도 같이 넘긴다.
+            //   물체 쪽 스크립트(예: Seat)가 "누가 눌렀냐"에 따라 다르게 반응할 수 있게 하려고.
+            current.Interact(role);
         }
     }
 
