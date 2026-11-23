@@ -8,16 +8,24 @@
     <LangVersion>9.0</LangVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Core/*.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/AgentActionRunner.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/AgentBodyController.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/RobotAnimatorBridge.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/RobotExplorationController.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/AgentInteractable.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/SceneStageContext.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/VoiceAgent.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/AgentButton.cs" />
-    <Compile Include="../../../Assets/VoiceAI/Runtime/Unity/SceneCommandTargeting.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/API/AgentApiException.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Agent/AgentBrain.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Core/AgentCommandRules.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Core/AgentModels.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/API/AgentRequestBuilder.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/API/AgentResponseParser.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Core/FrustrationDirector.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/API/MultipartFormData.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Input/WavEncoder.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Agent/AgentActionRunner.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Movement/AgentBodyController.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Movement/RobotAnimatorBridge.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Exploration/RobotExplorationController.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/AgentInteractable.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/SceneStageContext.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Agent/VoiceAgent.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/AgentButton.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/SceneCommandTargeting.cs" />
     <Compile Include="UnityShim.cs" />
     <Compile Include="BehaviorTests.cs" />
     <Reference Include="../../../Library/PackageCache/com.unity.nuget.newtonsoft-json*/Runtime/Newtonsoft.Json.dll" Condition="'$(NewtonsoftJsonPath)' == ''" />

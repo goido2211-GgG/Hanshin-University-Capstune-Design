@@ -4,7 +4,7 @@
 
 버튼 동작 시험은 가짜 키 로더와 UnityShim을 사용한다. 테스트 실행 파일의 위치에서 Unity 프로젝트 루트를 찾고, 필요하면 현재 디렉터리에서 다시 찾는다. Kyle Controller 파일이 없으면 해당 에셋 계약 사례를 `SKIP`으로 집계한다. 테스트 실패는 이름과 예외 스택을 `FAIL`로 출력하며, 나머지 테스트를 실행한 뒤 종료 코드 1을 반환한다.
 
-`UnityCompile`은 VoiceAI 런타임과 `Assets/Scripts`를 함께 컴파일한다. 새 Clone에 참조 캐시가 없을 때 명시적으로 제공할 수 있는 속성은 `-p:NewtonsoftJsonPath=<Newtonsoft.Json.dll 경로>`와 `-p:UnityPackageAssemblies=<Unity 패키지 DLL 폴더>`다. `BehaviorTests`에도 NewtonsoftJsonPath를 사용할 수 있다.
+`UnityCompile`은 `Assets/Scripts`의 팀 스크립트와 `Assets/Scripts/VoiceAI`의 런타임 스크립트를 함께 컴파일한다. 새 Clone에 참조 캐시가 없을 때 명시적으로 제공할 수 있는 속성은 `-p:NewtonsoftJsonPath=<Newtonsoft.Json.dll 경로>`와 `-p:UnityPackageAssemblies=<Unity 패키지 DLL 폴더>`다. `BehaviorTests`에도 NewtonsoftJsonPath를 사용할 수 있다.
 
 ## 2026-11-11 통합 입력 참조 빌드
 
@@ -31,7 +31,7 @@ Unity 설치 경로가 다르면 참조 빌드에 `-p:UnityEditorRoot="설치한
 
 ## 검증 범위
 
-- UnityCompile: Assets/VoiceAI/Runtime의 모든 실제 C# 소스를 Unity 6.3 엔진 DLL로 참조 컴파일한다. .NET 10에서의 참조 빌드이므로 Unity Editor 자체의 스크립트 컴파일·빌드 타깃·IL2CPP 검증을 대신하지 않는다.
+- UnityCompile: `Assets/Scripts`의 C# 소스를 Unity 6.3 엔진 DLL로 참조 컴파일한다. .NET 10에서의 참조 빌드이므로 Unity Editor 자체의 스크립트 컴파일·빌드 타깃·IL2CPP 검증을 대신하지 않는다.
 - BehaviorTests: 실제 Runner/Body/VoiceAgent/Brain/검증 코드를 컴파일해 시험한다. UnityShim으로 GameObject·Transform·라이프사이클을 최소 대체하고 키 로더·녹음·API 전송을 가짜로 바꾼다. 실제 비밀 파일·네트워크·마이크는 사용하지 않는다.
 - Shim은 물리·회전·IMGUI·Unity SynchronizationContext·실제 프레임 순서·네이티브 객체 파괴를 완전히 재현하지 않는다. 해당 항목은 Unity에서 수동 시험해야 한다.
 

@@ -9,7 +9,6 @@
     <UnityPackageAssemblies Condition="'$(UnityPackageAssemblies)' == ''">../../../Library/ScriptAssemblies</UnityPackageAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../../Assets/VoiceAI/Runtime/**/*.cs" />
     <Compile Include="../../../Assets/Scripts/**/*.cs" />
     <Reference Include="$(UnityEditorRoot)/Data/Managed/UnityEngine/*.dll" />
     <Reference Include="../../../Library/PackageCache/com.unity.nuget.newtonsoft-json*/Runtime/Newtonsoft.Json.dll" Condition="'$(NewtonsoftJsonPath)' == ''" />

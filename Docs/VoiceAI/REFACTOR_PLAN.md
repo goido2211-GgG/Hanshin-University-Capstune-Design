@@ -2,6 +2,8 @@
 
 기준일: 2026-11-09 (Asia/Seoul). **모든 코드 변경 항목은 미착수**이다. 이번 완료 범위는 개발 문서 작성뿐이다.
 
+아래 경로는 계획 작성 당시 기준이다. [현재 스크립트 위치와 역할](ARCHITECTURE.md#2-현재-클래스와-책임)을 참고한다.
+
 현재 근거와 호출 관계는 [ARCHITECTURE.md](ARCHITECTURE.md), 확정 게임 규칙은 [ROBOT_DESIGN.md](ROBOT_DESIGN.md), 사례별 시험은 [TEST_PLAN.md](TEST_PLAN.md)를 따른다. 게임 규칙이 이전 제안과 다르면 최신 ROBOT_DESIGN의 확정 규칙을 우선한다.
 
 ## 1. 범위와 최소 구성

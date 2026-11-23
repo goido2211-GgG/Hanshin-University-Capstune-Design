@@ -19,7 +19,7 @@
 
 ## 설치
 
-1. `Assets/VoiceAI` 폴더와 `secrets/README.txt`를 프로젝트에 복사합니다. `.gitignore`가 이미 있으면 내용을 합칩니다.
+1. `Assets/VoiceAI`와 `Assets/Scripts/VoiceAI` 폴더를 기존 `.meta` 파일과 함께 복사합니다. `secrets/README.txt`도 프로젝트에 복사하고 `.gitignore`가 이미 있으면 내용을 합칩니다. 통합 입력 스크립트는 이 프로젝트의 `Assets/Scripts/Player_Drone/ControlModeSwitcher.cs`에 의존합니다. [스크립트 위치와 역할](../../Docs/VoiceAI/ARCHITECTURE.md#2-현재-클래스와-책임)을 참고합니다.
 2. Package Manager → Add package by name → `com.unity.nuget.newtonsoft-json`
 3. Edit → Project Settings → Editor에서 Version Control은 Visible Meta Files, Asset Serialization은 Force Text로 둡니다.
 4. Unity가 만든 `.meta` 파일도 함께 커밋합니다.
@@ -108,7 +108,7 @@ voiceAgent.ResetConversation(keepTrust: true); // 스테이지 전환 시
 | 바꿀 것 | 위치 |
 |---|---|
 | 요원 성격, 말투, 오해 유형 | `Resources/VoiceAI/Prompts/agent_system.txt` |
-| 오해 확률, 연속 실패 한도 | `Runtime/Core/FrustrationDirector.cs` |
+| 오해 확률, 연속 실패 한도 | [FrustrationDirector.cs](../Scripts/VoiceAI/Core/FrustrationDirector.cs) |
 | 모델, 응답 속도 | `VoiceAgent` 인스펙터 |
 
 - **무작위 강제 오해는 현재 요청 경로에서 사용하지 않습니다.** 자세한 규칙 기반 오해·대상 선택은 후속 단계입니다.
