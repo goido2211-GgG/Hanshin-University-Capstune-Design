@@ -4,7 +4,7 @@ using UnityEngine.InputSystem;
 /// <summary>
 /// 드론 상태의 이동. WASD 수평 이동, Space 상승, Ctrl 하강, 마우스 시점.
 /// 중력 없이 떠 있고, 콜라이더로 벽과 물건에 부딪힌다.
-/// 이동 범위 제한은 아직 없음.
+/// [추가] F 키 입력 상호작용 감지 기능 포함.
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class DroneController : MonoBehaviour
@@ -43,13 +43,16 @@ public class DroneController : MonoBehaviour
     private void Update()
     {
         if (PauseMenu.IsPaused) return;   // 일시정지 중에는 입력 무시
-        
+
         Keyboard keyboard = Keyboard.current;
         Mouse mouse = Mouse.current;
         if (keyboard == null || mouse == null) return;
 
         Look(mouse);
         ReadMoveInput(keyboard);
+
+        // [추가] F 키 상호작용 입력 감지
+        CheckInteractionInput(keyboard);
     }
 
     private void FixedUpdate()
@@ -61,7 +64,7 @@ public class DroneController : MonoBehaviour
     private void Look(Mouse mouse)
     {
         Vector2 delta = mouse.delta.ReadValue() * lookSensitivity * GameSettings.Sensitivity;   // 설정의 감도 배율 적용
-        
+
         transform.Rotate(0f, delta.x, 0f);
 
         pitch = Mathf.Clamp(pitch - delta.y, -maxPitch, maxPitch);
@@ -81,5 +84,30 @@ public class DroneController : MonoBehaviour
         // 수평은 바라보는 방향(좌우 회전만 반영) 기준
         Vector3 horizontal = Vector3.ClampMagnitude(transform.right * x + transform.forward * z, 1f);
         targetVelocity = horizontal * moveSpeed + Vector3.up * (up * verticalSpeed);
+    }
+
+    // ==========================================
+    // [추가된 부분] F 키 입력 감지 메서드
+    // ==========================================
+    private void CheckInteractionInput(Keyboard keyboard)
+    {
+        // F 키를 '막 누른 순간'
+        if (keyboard.fKey.wasPressedThisFrame)
+        {
+            // 드론 주변 3미터 반경 내에 있는 모든 콜라이더 검사
+            float interactRange = 3f;
+            Collider[] colliders = Physics.OverlapSphere(transform.position, interactRange);
+
+            foreach (var col in colliders)
+            {
+                // 콜라이더에서 LeverItem 스크립트 찾기
+                LeverItem lever = col.GetComponent<LeverItem>();
+                if (lever != null)
+                {
+                    lever.PullLever(); // 가장 가까운 레버 당기기 실행
+                    break;             // 한번에 하나의 레버만 작동
+                }
+            }
+        }
     }
 }
