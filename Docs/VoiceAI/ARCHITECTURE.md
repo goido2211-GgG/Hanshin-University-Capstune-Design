@@ -21,7 +21,7 @@
 
 ## 반자율 탐색 v0.1 — 현재 구현
 
-새 [RobotExplorationController.cs](../../Assets/VoiceAI/Runtime/Unity/RobotExplorationController.cs)는 player에 사용자가 추가하는 opt-in 컴포넌트다. 별도 LLM/STT 호출 없이 실제 AgentInteractable 후보에서 `move_to → inspect` 계획만 만든다. 씬·Starter Assets 원본은 수정하지 않았다.
+새 [RobotExplorationController.cs](../../Assets/Scripts/VoiceAI/Exploration/RobotExplorationController.cs)는 player에 사용자가 추가하는 opt-in 컴포넌트다. 별도 LLM/STT 호출 없이 실제 AgentInteractable 후보에서 `move_to → inspect` 계획만 만든다. 씬·Starter Assets 원본은 수정하지 않았다.
 
 | 소유자 | 책임 |
 |---|---|
@@ -88,27 +88,34 @@ AgentBrain은 응답 후 곧바로 신뢰도·기억을 변경했다. 이벤트�
 
 ## 2. 현재 클래스와 책임
 
-모든 런타임 클래스의 네임스페이스는 `AgentEscape.VoiceAI`이다. 경로 접두사는 `Assets/VoiceAI/`이다.
+VoiceAI 런타임 스크립트는 `Assets/Scripts/VoiceAI/` 아래의 기능별 하위 폴더에 있다. 네임스페이스는 `AgentEscape.VoiceAI`이다. VoiceAI 프롬프트 리소스는 `Assets/VoiceAI/Resources/`에 있다.
 
-| 파일 / 클래스 | 실제 역할 |
-|---|---|
-| [VoiceAgent.cs](../../Assets/VoiceAI/Runtime/Unity/VoiceAgent.cs) / VoiceAgent | 입력·녹음·STT·LLM 조정, 명령별 연결 토큰, 최신 결과 검사·확정. 로컬 RequestStop 제공. 입력 상태는 Idle/Recording/Transcribing/Thinking |
-| [AgentActionRunner.cs](../../Assets/VoiceAI/Runtime/Unity/AgentActionRunner.cs) / AgentActionRunner | 실행 권한의 단독 소유자. Player/Autonomous 출처·우선순위·중지 억제·작업 ID·의도·대기·검증·종료. VoiceAgent와 같은 GameObject에서 자동 준비 |
-| [RobotExplorationController.cs](../../Assets/VoiceAI/Runtime/Unity/RobotExplorationController.cs) / RobotExplorationController | player의 탐색 제안자. 타이머·후보 선택·실패 기억. 수동 컴포넌트 추가와 대상 opt-in 필요 |
-| [AgentBodyController.cs](../../Assets/VoiceAI/Runtime/Unity/AgentBodyController.cs) / AgentBodyController | BeginAction/TickAction/CancelCurrentAction으로 단일 행동만 수행. 직선 Transform 이동·이동 방향 회전. 실제 위치 갱신 후 MotionUpdated(deltaTime), 정지/취소 시 MotionUpdated(0) 발행 |
-| [RobotAnimatorBridge.cs](../../Assets/VoiceAI/Runtime/Unity/RobotAnimatorBridge.cs) / RobotAnimatorBridge | Body 변위에서 실제 수평 속도를 측정해 StarterAssetsThirdPerson 파라미터만 설정. Transform·Animator.speed는 변경하지 않음. 필수 Animator는 Inspector에서 명시 연결 |
-| [VoiceAgentDebugUI.cs](../../Assets/VoiceAI/Runtime/Unity/VoiceAgentDebugUI.cs) / VoiceAgentDebugUI | 채팅·V키·녹음 버튼·중지 버튼·Esc. 입력/실행 상태·ID·의도·결과 표시. 명명된 이벤트 핸들러 해제와 로그 길이 제한 |
-| [AgentBrain.cs](../../Assets/VoiceAI/Runtime/Core/AgentBrain.cs) / AgentBrain | PrepareTurnAsync는 전송·파싱만 수행. CommitTurn은 유효 턴만 신뢰도·기억에 반영. 기존 RunTurnAsync 래퍼 유지 |
-| [AgentModels.cs](../../Assets/VoiceAI/Runtime/Core/AgentModels.cs) | 기존 행동·응답·상태 DTO, AgentCommandId, AgentExecutionState/Outcome, AgentExecutionResult, PreparedAgentTurn |
-| [AgentCommandRules.cs](../../Assets/VoiceAI/Runtime/Core/AgentCommandRules.cs) / AgentCommandRules | 전체 문장 일치 로컬 중지와 행동 복사. 대상 우선순위·복잡한 규칙 오해는 아직 구현하지 않음 |
-| [AgentResponseParser.cs](../../Assets/VoiceAI/Runtime/Core/AgentResponseParser.cs) / AgentResponseParser | API JSON 파싱, 질문/거부 행동 금지, 미지원 동사·null 방어. 계획 검증과 최신 실행 CheckAction에서 인벤토리 검사 시점 분리 |
-| [SceneStageContext.cs](../../Assets/VoiceAI/Runtime/Unity/SceneStageContext.cs) / SceneStageContext | 같은 씬 활성 대상 스냅샷. TryResolve는 실제 활성 대상이 유일할 때만 성공 |
-| [AgentInteractable.cs](../../Assets/VoiceAI/Runtime/Unity/AgentInteractable.cs) / AgentInteractable | 대상 메타데이터·활성 등록·탐색 opt-in·런타임 조사 기억. 퍼즐 실행 로직은 없음 |
-| [OpenAIClient.cs](../../Assets/VoiceAI/Runtime/Unity/OpenAIClient.cs) / OpenAIClient | 기존 STT·Responses HTTP 형식·모델·재시도 유지. 전송 시도 전 취소 검사 추가 |
-| [MicrophoneRecorder.cs](../../Assets/VoiceAI/Runtime/Unity/MicrophoneRecorder.cs) / MicrophoneRecorder, RecordedAudio | 기존 마이크·WAV·RMS 처리 유지. VoiceAgent가 Stop 예외와 취소를 처리 |
-| [OpenAIKeyProvider.cs](../../Assets/VoiceAI/Runtime/Unity/OpenAIKeyProvider.cs) / OpenAIKeyProvider | 기존 키 로더 유지. 키 파일은 이번 작업에서 읽지 않음 |
-| [WavEncoder.cs](../../Assets/VoiceAI/Runtime/Core/WavEncoder.cs), [MultipartFormData.cs](../../Assets/VoiceAI/Runtime/Core/MultipartFormData.cs), [AgentApiException.cs](../../Assets/VoiceAI/Runtime/Core/AgentApiException.cs) | 오디오 변환·업로드 본문·오류 표현 재사용 |
-| [FrustrationDirector.cs](../../Assets/VoiceAI/Runtime/Core/FrustrationDirector.cs) / FrustrationDirector, TurnDirective | 기존 타입 보존. 새 Brain 경로는 무작위 Decide/Report를 호출하지 않음. 생성자 매개변수는 호출 호환용 |
+| 하위 폴더 | 파일 | 역할 |
+|---|---|---|
+| `Core` | [AgentCommandRules.cs](../../Assets/Scripts/VoiceAI/Core/AgentCommandRules.cs) | 전체 문장 일치 로컬 중지와 행동 복사 |
+| `Core` | [AgentModels.cs](../../Assets/Scripts/VoiceAI/Core/AgentModels.cs) | 행동·응답·상태의 공통 모델과 명령 ID·실행 결과 정의 |
+| `Core` | [FrustrationDirector.cs](../../Assets/Scripts/VoiceAI/Core/FrustrationDirector.cs) | 기존 확률 기반 오해·연속 실패 조절과 `TurnDirective` 정의 |
+| `Input` | [MicrophoneRecorder.cs](../../Assets/Scripts/VoiceAI/Input/MicrophoneRecorder.cs) | 마이크 녹음과 음량 측정, `RecordedAudio` 생성 |
+| `Input` | [VoiceAIIntegrationInput.cs](../../Assets/Scripts/VoiceAI/Input/VoiceAIIntegrationInput.cs) | 통합 씬의 키 입력과 채팅 중 사람·드론 조작 제어 |
+| `Input` | [WavEncoder.cs](../../Assets/Scripts/VoiceAI/Input/WavEncoder.cs) | 오디오 샘플을 WAV 바이트로 변환 |
+| `API` | [AgentApiException.cs](../../Assets/Scripts/VoiceAI/API/AgentApiException.cs) | API 실패를 나타내는 예외 타입 |
+| `API` | [AgentRequestBuilder.cs](../../Assets/Scripts/VoiceAI/API/AgentRequestBuilder.cs) | Responses 요청 본문과 구조화 응답 스키마 생성 |
+| `API` | [AgentResponseParser.cs](../../Assets/Scripts/VoiceAI/API/AgentResponseParser.cs) | API JSON 파싱과 행동 계획 검증 |
+| `API` | [MultipartFormData.cs](../../Assets/Scripts/VoiceAI/API/MultipartFormData.cs) | 오디오 업로드용 multipart 요청 본문 생성 |
+| `API` | [OpenAIClient.cs](../../Assets/Scripts/VoiceAI/API/OpenAIClient.cs) | STT·Responses HTTP 요청, 취소 및 재시도 |
+| `API` | [OpenAIKeyProvider.cs](../../Assets/Scripts/VoiceAI/API/OpenAIKeyProvider.cs) | 런타임 API 인증 정보 로드 |
+| `Agent` | [AgentActionRunner.cs](../../Assets/Scripts/VoiceAI/Agent/AgentActionRunner.cs) | 플레이어·자율 명령 우선순위, 작업 ID, 실행 대기, 재검증, 취소 및 결과 발행 |
+| `Agent` | [AgentBrain.cs](../../Assets/Scripts/VoiceAI/Agent/AgentBrain.cs) | 요청 전송과 응답 준비, 유효한 턴의 신뢰도·기억 반영 |
+| `Agent` | [VoiceAgent.cs](../../Assets/Scripts/VoiceAI/Agent/VoiceAgent.cs) | 채팅·녹음·STT·LLM 흐름, 최신 명령 확인 및 중지 요청 처리 |
+| `Movement` | [AgentBodyController.cs](../../Assets/Scripts/VoiceAI/Movement/AgentBodyController.cs) | 이동·회전·조사 등 단일 행동 실행과 실제 이동·정지 이벤트 발행 |
+| `Movement` | [RobotAnimationEventReceiver.cs](../../Assets/Scripts/VoiceAI/Movement/RobotAnimationEventReceiver.cs) | 발걸음·착지 Animation Event 무음 수신 |
+| `Movement` | [RobotAnimatorBridge.cs](../../Assets/Scripts/VoiceAI/Movement/RobotAnimatorBridge.cs) | 로봇의 실제 수평 속도를 Animator 파라미터에 반영 |
+| `Interaction` | [AgentButton.cs](../../Assets/Scripts/VoiceAI/Interaction/AgentButton.cs) | 버튼 별칭·접근 지점·누르기 이벤트를 씬에 정의 |
+| `Interaction` | [AgentInteractable.cs](../../Assets/Scripts/VoiceAI/Interaction/AgentInteractable.cs) | 대상 메타데이터와 활성 등록, 탐색 허용, 조사 상태 관리 |
+| `Interaction` | [SceneCommandTargeting.cs](../../Assets/Scripts/VoiceAI/Interaction/SceneCommandTargeting.cs) | 명령 문장에서 대상을 해석하고 행동 대상과 일치하는지 검증 |
+| `Interaction` | [SceneStageContext.cs](../../Assets/Scripts/VoiceAI/Interaction/SceneStageContext.cs) | 씬의 활성 대상 스냅샷 생성과 고유 ID 조회 |
+| `Exploration` | [RobotExplorationController.cs](../../Assets/Scripts/VoiceAI/Exploration/RobotExplorationController.cs) | 자율 탐색 타이머·후보 선택·실패 대상 기억 |
+| `UI` | [VoiceAgentDebugUI.cs](../../Assets/Scripts/VoiceAI/UI/VoiceAgentDebugUI.cs) | 채팅·녹음·중지 조작 및 입력·실행 상태 표시 |
 
 기존 모델 값·프롬프트 파일·STT 업로드 형식은 유지했다. 무작위 강제 오해 지시만 새 요청에서 사용하지 않는다. 이는 완전한 규칙 기반 오해 구현을 뜻하지 않는다.
 

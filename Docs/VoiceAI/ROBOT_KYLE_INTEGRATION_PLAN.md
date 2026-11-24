@@ -8,12 +8,12 @@
 
 | 근거 파일·클래스 | 확인 사실 |
 |---|---|
-| [AgentBodyController.cs](../../Assets/VoiceAI/Runtime/Unity/AgentBodyController.cs) / AgentBodyController.BeginAction | 대상·방향으로 직선 목적지를 계산. Y 높이를 유지하고 대상 앞 stopDistance에 정지 |
+| [AgentBodyController.cs](../../Assets/Scripts/VoiceAI/Movement/AgentBodyController.cs) / AgentBodyController.BeginAction | 대상·방향으로 직선 목적지를 계산. Y 높이를 유지하고 대상 앞 stopDistance에 정지 |
 | 같은 파일 / TickAction | Vector3.MoveTowards로 Body Transform 위치 변경. 대상 이동은 RotateTowards로 회전하지만 move_direction은 현재 로봇 축으로 이동하고 회전시키지 않음 |
 | 같은 파일 / CancelCurrentAction | 행동·대상·이동 플래그 제거. Runner가 더 Tick하지 않으므로 현재 큐브 이동 중지 |
 | 같은 파일 / PickUp 분기 | 대상 부모를 Body Transform으로 바꾸고 localPosition=Vector3.up*carryHeight. 손 소켓·집기 클립·Rigidbody 처리 없음 |
-| [AgentActionRunner.cs](../../Assets/VoiceAI/Runtime/Unity/AgentActionRunner.cs) / AgentActionRunner | 1개의 Body만 등록, 의도·1초·매 프레임 검증 뒤 Begin/Tick 호출. 별도 컨트롤러 Update가 계속 이동하면 현재 취소 계약만으로는 정지 보장 불가 |
-| [VoiceAgent.cs](../../Assets/VoiceAI/Runtime/Unity/VoiceAgent.cs) | Runner를 VoiceAgent GameObject에 자동 준비. Body는 명시 참조 또는 같은 씬 유일 후보로 등록 |
+| [AgentActionRunner.cs](../../Assets/Scripts/VoiceAI/Agent/AgentActionRunner.cs) / AgentActionRunner | 1개의 Body만 등록, 의도·1초·매 프레임 검증 뒤 Begin/Tick 호출. 별도 컨트롤러 Update가 계속 이동하면 현재 취소 계약만으로는 정지 보장 불가 |
+| [VoiceAgent.cs](../../Assets/Scripts/VoiceAI/Agent/VoiceAgent.cs) | Runner를 VoiceAgent GameObject에 자동 준비. Body는 명시 참조 또는 같은 씬 유일 후보로 등록 |
 
 Animator, CharacterController.Move, NavMeshAgent, Rigidbody 기반 이동 호출은 현재 Body에 없다. README의 animator.SetTrigger 예시는 런타임 구현이 아니다.
 
