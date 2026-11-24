@@ -176,6 +176,11 @@ namespace AgentEscape.VoiceAI
             GUILayout.Label("출처: " + _agent.Runner.CurrentSource + "   자동 탐색 중지: " + _agent.Runner.AutonomySuppressed);
             GUILayout.Label("예정: " + _agent.Runner.PendingIntent);
             GUILayout.Label("최근 결과: " + _agent.Runner.LastResult);
+            var api = _agent.LastApiMetrics;
+            if (api != null)
+                GUILayout.Label($"해석 API: {api.Outcome} / {api.ElapsedMilliseconds}ms / 입력 {api.InputTokens?.ToString() ?? "-"} · 출력 {api.OutputTokens?.ToString() ?? "-"} 토큰");
+            if (_agent.LastTranscriptionMilliseconds.HasValue)
+                GUILayout.Label($"음성 전사 API: {_agent.LastTranscriptionMilliseconds}ms");
             bool stop = GUILayout.Button("즉시 중지 (Esc)");
             bool resume = GUILayout.Button("탐색 재개 (로컬)");
             bool close = externalInput && IsChatOpen && GUILayout.Button("채팅 닫기");

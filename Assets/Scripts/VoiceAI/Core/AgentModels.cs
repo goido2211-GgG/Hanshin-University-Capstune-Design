@@ -8,9 +8,11 @@ namespace AgentEscape.VoiceAI
     {
         public const string MoveTo = "move_to";
         public const string MoveDirection = "move_direction";
+        public const string Rotate = "rotate";
         public const string FollowDrone = "follow_drone";
         public const string Stop = "stop";
         public const string Wait = "wait";
+        public const string Speak = "speak";
         public const string Inspect = "inspect";
         public const string PickUp = "pick_up";
         public const string Drop = "drop";
@@ -20,17 +22,20 @@ namespace AgentEscape.VoiceAI
         public const string Push = "push";
         public const string Pull = "pull";
         public const string Press = "press";
+        public const string Interact = "interact";
 
         public static readonly string[] Verbs =
         {
-            MoveTo, MoveDirection, FollowDrone, Stop, Wait, Inspect,
-            PickUp, Drop, Use, Open, Close, Push, Pull, Press
+            MoveTo, MoveDirection, Rotate, FollowDrone, Stop, Wait, Speak, Inspect,
+            PickUp, Drop, Use, Open, Close, Push, Pull, Press, Interact
         };
+
+        internal static readonly string[] TargetClarificationVerbs = { PickUp, MoveTo, Inspect, Interact, Press };
 
         /// <summary>대상 없이 실행할 수 있는 동사.</summary>
         public static readonly HashSet<string> NoTargetVerbs = new HashSet<string>
         {
-            MoveDirection, FollowDrone, Stop, Wait
+            MoveDirection, Rotate, FollowDrone, Stop, Wait, Speak
         };
 
         /// <summary>어떤 오브젝트에든 항상 허용되는 동사. 신뢰도 검사도 받지 않는다.</summary>
@@ -62,6 +67,9 @@ namespace AgentEscape.VoiceAI
         [JsonProperty("item")] public string Item;
         [JsonProperty("direction")] public string Direction;
         [JsonProperty("steps")] public int? Steps;
+        [JsonProperty("distance")] public float? Distance;
+        [JsonProperty("angle")] public float? Angle;
+        [JsonProperty("text")] public string Text;
 
         public override string ToString()
         {
@@ -70,6 +78,8 @@ namespace AgentEscape.VoiceAI
             if (Item != null) text += " item=" + Item;
             if (Direction != null) text += " direction=" + Direction;
             if (Steps != null) text += " steps=" + Steps;
+            if (Distance != null) text += " distance=" + Distance.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (Angle != null) text += " angle=" + Angle.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
             return text;
         }
     }
@@ -81,6 +91,7 @@ namespace AgentEscape.VoiceAI
         [JsonProperty("emotion")] public string Emotion = "neutral";
         [JsonProperty("comprehension")] public string Comprehension = AgentVocabulary.Understood;
         [JsonProperty("interpretation")] public string Interpretation = "";
+        [JsonProperty("clarify_verb")] public string ClarifyVerb;
         [JsonProperty("trust_delta")] public int TrustDelta;
         [JsonProperty("actions")] public List<AgentAction> Actions = new List<AgentAction>();
     }
@@ -103,8 +114,31 @@ namespace AgentEscape.VoiceAI
         public List<RejectedAction> Rejected = new List<RejectedAction>();
         public int Trust;
         public TurnDirective Directive;
+        public AgentApiMetrics ApiMetrics;
         /// <summary>API 오류로 대체 대사를 사용한 턴이면 true.</summary>
         public bool IsFallback;
+    }
+
+    public enum AgentApiOutcome { Completed, Failed, Cancelled }
+
+    /// <summary>요청 본문이나 응답 원문을 담지 않는 모델 호출 지표.</summary>
+    public sealed class AgentApiMetrics
+    {
+        public AgentApiOutcome Outcome { get; }
+        public long ElapsedMilliseconds { get; }
+        public int? InputTokens { get; }
+        public int? OutputTokens { get; }
+        public int? TotalTokens { get; }
+
+        internal AgentApiMetrics(AgentApiOutcome outcome, long elapsedMilliseconds,
+            int? inputTokens, int? outputTokens, int? totalTokens)
+        {
+            Outcome = outcome;
+            ElapsedMilliseconds = elapsedMilliseconds;
+            InputTokens = inputTokens;
+            OutputTokens = outputTokens;
+            TotalTokens = totalTokens;
+        }
     }
 
     public readonly struct AgentCommandId : System.IEquatable<AgentCommandId>
@@ -142,13 +176,21 @@ namespace AgentEscape.VoiceAI
         internal string PlayerText;
         internal StageContext Context;
         internal AgentResponse Response;
+        internal AgentApiMetrics ApiMetrics;
     }
 
-    /// <summary>요원에게 현재 보이는 오브젝트. 퍼즐 정답은 넣지 않는다.</summary>
+    /// <summary>씬에 등록된 오브젝트 정보. 퍼즐 정답은 넣지 않는다.</summary>
     public sealed class StageObject
     {
         public string Id;
         public string DisplayName;
+        public string SceneName;
+        public List<string> Aliases = new List<string>();
+        public string Color;
+        public float? PositionX;
+        public float? PositionY;
+        public float? PositionZ;
+        public bool? CanInteract;
         public string Description;
         public string State;
         /// <summary>move_to, inspect 외에 허용할 동사. 비어 있으면 그 둘만 가능하다.</summary>
@@ -166,6 +208,14 @@ namespace AgentEscape.VoiceAI
         /// <summary>0: 잘 알아들음 ~ 3: 자주 오해함.</summary>
         public int ConfusionLevel;
         public string AgentLocation = "";
+        public float? AgentPositionX;
+        public float? AgentPositionY;
+        public float? AgentPositionZ;
+        public float? AgentHeading;
+        public string SelectedTargetId;
+        public AgentAction LastAction;
+        public bool? LastActionSucceeded;
+        public AgentAction CurrentAction;
         public List<StageObject> Objects = new List<StageObject>();
         /// <summary>요원이 들고 있는 오브젝트 ID. Objects에도 들어 있어야 한다.</summary>
         public List<string> Inventory = new List<string>();

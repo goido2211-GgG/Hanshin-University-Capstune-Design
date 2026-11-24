@@ -6,12 +6,16 @@
     <Nullable>disable</Nullable>
     <LangVersion>9.0</LangVersion>
     <UnityEditorRoot Condition="'$(UnityEditorRoot)' == ''">C:/Program Files/Unity/Hub/Editor/6000.3.25f1/Editor</UnityEditorRoot>
+    <UnityPackageAssemblies Condition="'$(UnityPackageAssemblies)' == ''">../../../Library/ScriptAssemblies</UnityPackageAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../../Assets/VoiceAI/Runtime/**/*.cs" />
-    <Compile Include="../../../Assets/Scripts/Player_Drone/*.cs" />
+    <Compile Include="../../../Assets/Scripts/**/*.cs" />
     <Reference Include="$(UnityEditorRoot)/Data/Managed/UnityEngine/*.dll" />
-    <Reference Include="../../../Library/PackageCache/com.unity.nuget.newtonsoft-json*/Runtime/Newtonsoft.Json.dll" />
-    <Reference Include="../../../Library/ScriptAssemblies/Unity.InputSystem.dll" />
+    <Reference Include="../../../Library/PackageCache/com.unity.nuget.newtonsoft-json*/Runtime/Newtonsoft.Json.dll" Condition="'$(NewtonsoftJsonPath)' == ''" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(NewtonsoftJsonPath)" Condition="'$(NewtonsoftJsonPath)' != ''" />
+    <Reference Include="$(UnityPackageAssemblies)/Unity.InputSystem.dll" />
+    <Reference Include="$(UnityPackageAssemblies)/Unity.Cinemachine.dll" />
+    <Reference Include="$(UnityPackageAssemblies)/UnityEngine.UI.dll" />
+    <Reference Include="$(UnityPackageAssemblies)/Unity.TextMeshPro.dll" />
   </ItemGroup>
 </Project>
