@@ -119,6 +119,52 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &68319511
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 68319512}
+  - component: {fileID: 68319513}
+  m_Layer: 0
+  m_Name: DroneAccessPolicy
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &68319512
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 68319511}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 3421965788937658743}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &68319513
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 68319511}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dafa770522d9c6d41a232824757e5c27, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SeatedDroneAccess
+  deniedMessage: "\uC758\uC790\uC5D0 \uC549\uC544 \uC788\uC744 \uB54C\uB9CC \uB4DC\uB860\uC744
+    \uC870\uC885\uD560 \uC218 \uC788\uC5B4\uC694."
 --- !u!1 &365397754
 GameObject:
   m_ObjectHideFlags: 0
@@ -529,6 +575,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: 1887567278874550021, guid: aa1f25e3e4f95134cb8fb8bb6f439a64, type: 3}
+      propertyPath: droneAccessPolicy
+      value: 
+      objectReference: {fileID: 68319513}
     - target: {fileID: 2690184594751756083, guid: aa1f25e3e4f95134cb8fb8bb6f439a64, type: 3}
       propertyPath: m_AnchorMax.y
       value: 0
@@ -663,9 +713,17 @@ PrefabInstance:
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
-    m_AddedGameObjects: []
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: 6156143698496565081, guid: aa1f25e3e4f95134cb8fb8bb6f439a64, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 68319512}
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: aa1f25e3e4f95134cb8fb8bb6f439a64, type: 3}
+--- !u!4 &3421965788937658743 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 6156143698496565081, guid: aa1f25e3e4f95134cb8fb8bb6f439a64, type: 3}
+  m_PrefabInstance: {fileID: 3421965788937658742}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
