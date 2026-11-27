@@ -17,6 +17,8 @@ public class PressurePlate : MonoBehaviour
     public UnityEvent onPressed;
     public UnityEvent onReleased;
 
+    [SerializeField] private bool useExternalPressure;
+
     private Vector3 initialPos;
     private Vector3 pressedPos;
     private Vector3 currentVelocity;
@@ -27,7 +29,10 @@ public class PressurePlate : MonoBehaviour
         if (plateTop != null)
         {
             initialPos = plateTop.localPosition;
-            pressedPos = initialPos + Vector3.down * pressDepth;
+            Vector3 displacement = Vector3.down * pressDepth;
+            if (useExternalPressure && plateTop.parent != null)
+                displacement = plateTop.parent.InverseTransformVector(displacement);
+            pressedPos = initialPos + displacement;
         }
     }
 
@@ -45,8 +50,16 @@ public class PressurePlate : MonoBehaviour
         );
     }
 
+    public void SetExternalPressure(bool pressed)
+    {
+        if (!useExternalPressure || pressed == (objectsOnPlate > 0)) return;
+        objectsOnPlate = pressed ? 1 : 0;
+        (pressed ? onPressed : onReleased)?.Invoke();
+    }
+
     private void OnTriggerEnter(Collider other)
     {
+        if (useExternalPressure) return;
         // 플레이어나 상자 등 상호작용할 태그 확인 (필요시 조건 수정)
         if (other.CompareTag("Player") || other.CompareTag("Pushable"))
         {
@@ -62,6 +75,7 @@ public class PressurePlate : MonoBehaviour
 
     private void OnTriggerExit(Collider other)
     {
+        if (useExternalPressure) return;
         if (other.CompareTag("Player") || other.CompareTag("Pushable"))
         {
             objectsOnPlate = Mathf.Max(0, objectsOnPlate - 1);

@@ -20,6 +20,8 @@ namespace AgentEscape.VoiceAI
         public Transform approachPoint;
         [Min(0.05f)] public float interactionDistance = 0.25f;
         public List<string> aliases = new List<string>();
+        [Min(0)] public int roomId;
+        public List<string> doorAliases = new List<string>();
         public MonoBehaviour receiver;
         public UnityEvent onPress = new UnityEvent();
 

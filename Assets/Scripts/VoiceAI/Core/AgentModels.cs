@@ -70,6 +70,7 @@ namespace AgentEscape.VoiceAI
         [JsonProperty("distance")] public float? Distance;
         [JsonProperty("angle")] public float? Angle;
         [JsonProperty("text")] public string Text;
+        [JsonIgnore] internal string PlacementTargetId;
 
         public override string ToString()
         {
@@ -191,6 +192,9 @@ namespace AgentEscape.VoiceAI
         public float? PositionY;
         public float? PositionZ;
         public bool? CanInteract;
+        public int ButtonRoomId;
+        public float? ButtonApproachDistance;
+        public List<string> DoorAliases = new List<string>();
         public string Description;
         public string State;
         /// <summary>move_to, inspect 외에 허용할 동사. 비어 있으면 그 둘만 가능하다.</summary>
@@ -212,6 +216,7 @@ namespace AgentEscape.VoiceAI
         public float? AgentPositionY;
         public float? AgentPositionZ;
         public float? AgentHeading;
+        public int ButtonRoomId;
         public string SelectedTargetId;
         public AgentAction LastAction;
         public bool? LastActionSucceeded;

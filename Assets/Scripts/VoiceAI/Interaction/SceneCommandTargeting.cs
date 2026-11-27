@@ -26,6 +26,16 @@ namespace AgentEscape.VoiceAI
         private static readonly Regex PressRequest = new Regex(
             @"(?:눌러(?:\s*(?:줘|주세요|줄래|봐))?|누르(?:세요|자)|작동\s*(?:시켜|해))(?:\s*(?:[,.]\s*)?(?:그리고|그다음|그 다음)\s|$)");
         private static readonly Regex NegatedPress = new Regex(@"누르지|누르면\s*안|작동하지|작동시키지");
+        private const string DoorOpenRequest = @"(?:열어|개방\s*(?:해|시켜))" +
+            @"(?:\s*(?:줘|주세요|줄래|주시겠어요|주실래요|줄\s*수\s*있(?:어|겠어|을까)))?";
+        private static readonly Regex DoorOpen = new Regex(
+            @"^(?:(?:이제|그럼|먼저)\s+)?(?<descriptor>(?<door>.*?)\s*(?:출입문|문))(?:을)?\s*(?:좀\s*)?" +
+            DoorOpenRequest + "$");
+        private static readonly Regex DoorOpeningIntent = new Regex(
+            @"문(?:을)?\s*(?:좀\s*)?" + DoorOpenRequest + @"(?:\s*(?:[,.]\s*)?(?:그리고|그다음|그 다음)\s|$)");
+        private static readonly Regex GenericDoorClause = new Regex(
+            @"(?:^|[,.;]\s*|(?:게|도록)\s+)(?:저\s*|이\s*)?(?:출입문|문)(?:을)?\s*(?:좀\s*)?" + DoorOpenRequest + "$");
+        private static readonly Regex NegatedDoorOpening = new Regex(@"열지|열면\s*안|개방하지|개방시키지|열어도\s*(?:되|돼)");
         private static readonly Regex Pickup = new Regex(
             @"^(?<selector>.*?)\s*(?:을|를)?\s*(?:좀\s*)?(?:(?:집어|주워)(?:\s*줘|주세요|라)?|집으세요|주우세요)$");
         private const string DropPrefix = @"^(?:(?:이제|그럼)\s+)?(?<selector>.*?)\s*(?:을|를)?\s*(?:(?:바닥에|여기에?|이 자리에|제자리에|손에서)\s*)?(?:좀\s*)?";
@@ -39,6 +49,20 @@ namespace AgentEscape.VoiceAI
             @"^(?:이제\s+)?다시\s*(?:집어|주워)(?:\s*(?:줘|주세요))?$");
         private static readonly Regex CarryMove = new Regex(
             @"^(?:(?:이제|그럼)\s+)?(?:(?:그거|그걸|그것을)\s*)?들고\s+(?<move>.+)$");
+        private const string PuzzlePrefix = @"^(?:(?:이제|그럼|먼저)\s+)?";
+        private const string PuzzleBox = @"(?<box>[^,.;]*?(?:상자|그거|그걸|그것))(?:을|를)?\s*";
+        private const string PuzzlePad = @"(?<pad>[^,.;]*?발판)\s*(?:위\s*)?(?:까지|으로|로|에)\s*";
+        private const string PuzzleEnding = @"(?:\s*(?:줘|주세요|줄래|봐))?$";
+        private const string PuzzleSetDown = @"(?:올려\s*(?:놔|놓아)|내려\s*(?:놔|놓아)|놓아|놔)";
+        private static readonly Regex PuzzleRelease = new Regex(
+            PuzzlePrefix + PuzzleBox + @"(?:좀\s*)?떨어\s*뜨려" + PuzzleEnding);
+        private static readonly Regex PuzzleTravel = new Regex(
+            PuzzlePrefix + "(?:" + PuzzleBox + ")?" + PuzzlePad + @"(?:좀\s*)?(?:옮겨|가)" + PuzzleEnding);
+        private static readonly Regex PuzzlePlace = new Regex(
+            PuzzlePrefix + "(?:" + PuzzleBox + ")?" + PuzzlePad + @"(?:좀\s*)?" + PuzzleSetDown + PuzzleEnding);
+        private static readonly Regex PuzzleCompound = new Regex(
+            PuzzlePrefix + PuzzleBox + @"(?:가져다가?|집어서|집고|주워서)\s*" + PuzzlePad +
+            @"(?:좀\s*)?" + PuzzleSetDown + PuzzleEnding);
         private static readonly Regex PickupIntent = new Regex(
             @"(?:집어|집고|집으세요|집을래|주워|줍고|주우세요|들어\s*올려|들고|회수해|가져와)(?=$|[\s,.!?。！？]|줘|주세요|줄래|라)");
         private static readonly Regex NegatedPickup = new Regex(
@@ -99,6 +123,30 @@ namespace AgentEscape.VoiceAI
             return false;
         }
 
+        internal static bool TryParseDoorOpen(string text, out string selector)
+        {
+            string normalized = Normalize(text);
+            var match = DoorOpen.Match(normalized);
+            if (!match.Success || !HasDoorOpeningIntent(normalized) ||
+                AdditionalAction.IsMatch(match.Groups["door"].Value))
+            {
+                selector = null;
+                return false;
+            }
+            string door = match.Groups["door"].Value.Trim();
+            selector = door is "" or "저" or "이" ? "" : match.Groups["descriptor"].Value;
+            return true;
+        }
+
+        private static bool HasDoorOpeningIntent(string normalized) => DoorOpeningIntent.IsMatch(normalized) &&
+            !NegatedDoorOpening.IsMatch(normalized) && !ConditionalAction.IsMatch(normalized);
+
+        internal static bool IsSecondDoorSelector(string selector) =>
+            Regex.IsMatch(MatchKey(selector), @"^(?:두번째|둘째|2번째|2번|2)(?:출입문|문)$");
+
+        private static bool HasButtonPressIntent(string normalized) => PressRequest.IsMatch(normalized) &&
+            !NegatedPress.IsMatch(normalized) && !ConditionalAction.IsMatch(normalized);
+
         internal static bool IsNeighborCorrection(string text) => NeighborCorrection.IsMatch(Normalize(text));
 
         internal static bool TryParseTargetCommand(string text, out string verb, out string selector)
@@ -139,6 +187,39 @@ namespace AgentEscape.VoiceAI
         }
 
         internal static bool IsRepickCommand(string text) => !HasQuestionMark(text) && Repick.IsMatch(Normalize(text));
+
+        internal enum BoxPuzzleAction { Release, Travel, Place, PickUpAndPlace }
+
+        internal static bool TryParseBoxPuzzleCommand(string text, out BoxPuzzleAction action,
+            out string boxSelector, out string padSelector)
+        {
+            action = default;
+            boxSelector = padSelector = null;
+            string normalized = Normalize(text);
+            if (normalized.Length > 160 || HasQuestionMark(text) || ConditionalAction.IsMatch(normalized) ||
+                NegatedPickup.IsMatch(normalized) || NegatedDrop.IsMatch(normalized)) return false;
+
+            var match = PuzzleRelease.Match(normalized);
+            if (!match.Success)
+            {
+                action = BoxPuzzleAction.PickUpAndPlace;
+                match = PuzzleCompound.Match(normalized);
+            }
+            if (!match.Success)
+            {
+                action = BoxPuzzleAction.Travel;
+                match = PuzzleTravel.Match(normalized);
+            }
+            if (!match.Success)
+            {
+                action = BoxPuzzleAction.Place;
+                match = PuzzlePlace.Match(normalized);
+            }
+            if (!match.Success) return false;
+            boxSelector = match.Groups["box"].Value.Trim();
+            padSelector = match.Groups["pad"].Value.Trim();
+            return !AdditionalAction.IsMatch(boxSelector) && !AdditionalAction.IsMatch(padSelector);
+        }
 
         internal static bool TryParseCarryMove(string text, out AgentAction[] actions)
         {
@@ -220,7 +301,46 @@ namespace AgentEscape.VoiceAI
             string relation = RelationKey(descriptor);
             return items.Where(item => (kind != null && IsCategory(item, kind)) ||
                 (colorMatch && IsCategory(item, colorKind) && HasColor(item, color)) ||
-                Names(item).Any(name => MatchKey(name) == key || (relation != null && RelationKey(name) == relation))).ToArray();
+                Names(item).Any(name => MatchKey(name) == key || (relation != null && RelationKey(name) == relation)) ||
+                item.DoorAliases.Any(alias => MatchKey(alias) == key)).ToArray();
+        }
+
+        internal static IReadOnlyList<StageObject> ResolveButtonSelection(string selector, StageContext context,
+            IReadOnlyCollection<string> allowedIds = null, bool doorsOnly = false)
+        {
+            var items = context.Objects.Where(item => IsButton(item) && (!doorsOnly || item.DoorAliases.Count > 0) &&
+                (allowedIds == null || allowedIds.Contains(item.Id))).ToArray();
+            if (!string.IsNullOrWhiteSpace(selector))
+            {
+                if (doorsOnly)
+                {
+                    string key = MatchKey(selector);
+                    if (key == "그문" || key == "그출입문")
+                        return items.Where(item => item.Id == context.SelectedTargetId).ToArray();
+                    return items.Where(item => item.DoorAliases.Any(alias => MatchKey(alias) == key)).ToArray();
+                }
+                var ids = items.Select(item => item.Id).ToArray();
+                var matches = ResolveSelection(selector, context, ids);
+                return matches.Count > 0 ? matches : ResolveSelection(selector + " 버튼", context, ids);
+            }
+            if (items.Length <= 1) return items;
+
+            var sameRoom = context.ButtonRoomId == 0 ? items :
+                items.Where(item => item.ButtonRoomId == context.ButtonRoomId).ToArray();
+            if (sameRoom.Length == 1) return sameRoom;
+            if (sameRoom.Length == 0) return items;
+            // Unconfigured scenes retain explicit clarification and recent-target behavior.
+            var ranked = sameRoom.Where(item => item.ButtonRoomId > 0 && item.CanInteract == true && item.ButtonApproachDistance.HasValue)
+                .OrderBy(item => item.ButtonApproachDistance.Value).ToArray();
+            if (ranked.Length == sameRoom.Length)
+            {
+                var nearest = ranked[0];
+                float distance = nearest.ButtonApproachDistance.Value;
+                bool recentlySelected = context.SelectedTargetId == nearest.Id;
+                if (distance <= (recentlySelected ? 3f : 1.5f) && ranked[1].ButtonApproachDistance.Value - distance >= 1.5f)
+                    return new[] { nearest };
+            }
+            return sameRoom;
         }
 
         internal static string CheckGrounding(string text, StageContext context, AgentAction[] actions)
@@ -241,12 +361,15 @@ namespace AgentEscape.VoiceAI
                     TryReadDropSelector(HeldPlacement.Match(normalized), out dropSelector)))
                 return dropSelector.Length == 0 || ResolveSelection(dropSelector, context, context.Inventory).Count == 1
                     ? null : "지정한 물체를 들고 있지 않습니다.";
-            if (press.Length > 0 && (!PressRequest.IsMatch(normalized) || NegatedPress.IsMatch(normalized)))
+            bool doorOpening = HasDoorOpeningIntent(normalized);
+            if (press.Length > 0 && !doorOpening && !HasButtonPressIntent(normalized))
                 return "버튼을 누르라는 명령인지 확인해 주세요.";
             if (press.Length > 1)
                 return "한 번에 누를 버튼 하나의 이름이나 번호를 알려 주세요.";
 
-            var candidates = CandidateIds(normalized, context, out bool hasNamedTargets);
+            bool hasNamedTargets = false;
+            var candidates = press.Length > 0 ? PressCandidateIds(normalized, context) :
+                CandidateIds(normalized, context, out hasNamedTargets);
             foreach (var action in targeted)
             {
                 bool pressing = action.Verb == AgentVocabulary.Press || action.Verb == AgentVocabulary.Interact;
@@ -257,6 +380,40 @@ namespace AgentEscape.VoiceAI
                         "어느 대상을 말씀하시는 건가요? 이름을 알려 주세요.";
             }
             return null;
+        }
+
+        internal static IReadOnlyList<string> PressCandidateIds(string text, StageContext context)
+        {
+            string normalized = Normalize(text);
+            if (HasDoorOpeningIntent(normalized))
+            {
+                if (TryParseDoorOpen(normalized, out string doorSelector))
+                {
+                    var simple = ResolveButtonSelection(doorSelector, context, doorsOnly: true);
+                    if (simple.Count > 0 || doorSelector.Length == 0) return simple.Select(item => item.Id).ToArray();
+                }
+                var named = context.Objects.Where(item => IsButton(item) && item.DoorAliases.Any(alias => Mentions(normalized, alias)))
+                    .Select(item => item.Id).ToArray();
+                if (named.Length > 0 || !GenericDoorClause.IsMatch(normalized)) return named;
+                return ResolveButtonSelection("", context, doorsOnly: true).Select(item => item.Id).ToArray();
+            }
+            if (!HasButtonPressIntent(normalized)) return Array.Empty<string>();
+
+            if (TryParseButtonPlan(normalized, out string selector, out bool useSelected, out _))
+            {
+                var simple = ResolveButtonSelection(useSelected ? "그 버튼" : selector, context);
+                if (simple.Count > 0 || selector.Length == 0) return simple.Select(item => item.Id).ToArray();
+            }
+            if (Reference.IsMatch(normalized))
+                return CandidateIds(normalized, context, out _).Where(id => context.Objects.Any(item => item.Id == id && IsButton(item))).ToArray();
+
+            var generic = GenericTarget.Match(normalized);
+            if (generic.Success && generic.Groups["kind"].Value == "버튼" &&
+                Regex.IsMatch(normalized.Substring(generic.Length), @"^\s*(?:좀\s*)?(?:앞(?:까지|으로)?\s*가서\s*)?" +
+                    @"(?:눌러(?:\s*(?:줘|주세요|줄래|봐))?|누르(?:세요|자)|작동\s*(?:시켜|해))$"))
+                return ResolveButtonSelection("", context).Select(item => item.Id).ToArray();
+
+            return CandidateIds(normalized, context, out _).Where(id => context.Objects.Any(item => item.Id == id && IsButton(item))).ToArray();
         }
 
         private static IReadOnlyList<string> CandidateIds(string text, StageContext context, out bool hasDistinctNames)

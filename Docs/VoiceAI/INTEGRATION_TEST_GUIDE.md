@@ -1,5 +1,32 @@
 # VoiceAI 통합 시험 씬
 
+## FirstScene 팀 테스트
+
+`Assets/Scenes/FirstScene.unity`는 Unity Hub에서 **6000.3.25f1**로 연다. `Packages/manifest.json`과 `Packages/packages-lock.json`의 의존성을 Unity가 복원하도록 기다린다.
+
+### Robot Kyle 로컬 복원
+
+1. 팀원이 사용할 권한이 있는 Unity 계정으로 Asset Store의 **First Person + Third Person | Character Controllers**를 확보한다. Unity의 **Window → Package Manager → My Assets**에서 패키지를 다운로드하고 Import한다. 기존에 팀에서 확인한 설치본이 있다면 같은 패키지 버전을 사용한다. [Unity Asset Store](https://assetstore.unity.com/packages/3d/characters/first-person-third-person-character-controllers-196526) · [Unity 6000.3 Import 안내](https://docs.unity3d.com/6000.3/Documentation/Manual/upm-ui-import.html)
+2. 패키지의 `Assets/Starter Assets/Runtime/SpaceRobotKyle/`와 `Runtime/ThirdPersonController/Character/`의 모델·재질·아바타·애니메이션 의존성을 원본 경로와 `.meta`로 설치한다. 가져오기 목록에 기존 Input System·Cinemachine 설정이나 샘플 씬이 있다면 프로젝트 파일을 덮어쓰지 않도록 확인한다. `Assets/Starter Assets/`는 로컬에서 관리한다.
+3. 아래 두 `.meta`의 `guid`를 확인한다. 설치 버전의 GUID가 다르면 팀에서 확인한 패키지 판본과 Import 항목을 확인한다. FirstScene의 참조나 설치된 에셋의 GUID를 직접 바꾸면 기존 씬의 연결도 깨질 수 있다.
+
+| 로컬 파일 | 원본 GUID |
+|---|---|
+| `Assets/Starter Assets/Runtime/SpaceRobotKyle/Models/KyleRobot.fbx` | `b1787a7070753594996dac074aee4532` |
+| `Assets/Starter Assets/Runtime/ThirdPersonController/Character/Animations/StarterAssetsThirdPerson.controller` | `40db3173a05ae3242b1c182a09b0a183` |
+
+4. `FirstScene`을 열고 `AIRobot - Robot Kyle` 아래의 모델과 Animator Controller가 연결되는지 Inspector에서 확인한다. 각 팀원이 에셋을 로컬로 설치하므로 GitHub 브랜치에는 패키지 원본과 `.meta`를 포함하지 않는다.
+
+### 저녁 통합 테스트 순서
+
+1. Game 뷰에서 드론을 기동 발판 위에 놓고 왼쪽 Ctrl로 하강한다. 캡슐이 상승한 뒤 Kyle이 활성화되고 자율탐색이 기본 OFF인지 확인한다.
+2. Enter로 한글 채팅을 열고 `문 열어`를 입력한다. Kyle이 첫 번째 벽면 버튼을 눌러 문을 열면 `초록색 버튼 눌러`를 입력한다. Kyle이 다음 구역으로 이동해 상자를 떨어뜨린다.
+3. 상자가 멈추면 `저 상자 집어` → `상자를 발판 위로 옮겨` → `발판에 내려놔`를 실행한다. 두 번째 문은 지정한 상자가 발판에 안착할 때 열린다.
+4. 씬을 다시 시작하고 상자를 떨어뜨린 뒤 `저 상자 가져다가 문 여는 발판 위에 올려놔`를 한 번 입력한다. 한국어 IME에서 조합 완료와 명령 전송이 구분되는지도 확인한다.
+5. 실제 음성은 마이크 권한과 로컬 API 설정을 준비한 팀원이 V를 누른 채 명령을 말하고 떼어 확인한다. 키는 `OPENAI_API_KEY` 환경 변수 또는 로컬 `secrets/openai_api_key.txt`로 설정한다. 채팅의 로컬 퍼즐 명령은 키 없이 시험할 수 있다.
+
+아래 내용은 기존 `VoiceAI_Integration_Test` 씬에 대한 기록이다.
+
 기준일: 2026-11-11, Unity 6000.3.25f1. 이 문서는 통합 worktree용이다. 원본 VoiceAI 프로젝트와 기존 Test_Scene / kkws_Scene / ssm 씬은 보존한다.
 
 ## 확정된 역할

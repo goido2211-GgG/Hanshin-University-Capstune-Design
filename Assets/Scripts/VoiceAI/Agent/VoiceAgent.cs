@@ -65,6 +65,7 @@ namespace AgentEscape.VoiceAI
         {
             internal string[] Verbs;
             internal bool ButtonsOnly;
+            internal bool DoorsOnly;
             internal bool BoxesOnly;
             internal string[] CandidateIds;
         }
@@ -102,16 +103,17 @@ namespace AgentEscape.VoiceAI
                 return false;
             }
             string apiKey;
-            try { apiKey = OpenAIKeyProvider.Load(); }
+            try
+            {
+                if (!OpenAIKeyProvider.TryLoad(out apiKey))
+                {
+                    StartupError = "API 키가 필요합니다. 이동과 버튼 조작은 채팅으로 명령할 수 있습니다.";
+                    return false;
+                }
+            }
             catch (Exception)
             {
                 StartupError = "OpenAI API 키를 불러오지 못했습니다. 키 설정을 확인해 주세요.";
-                Fail(StartupError);
-                return false;
-            }
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                StartupError = "OpenAI API 키가 설정되지 않았습니다.";
                 Fail(StartupError);
                 return false;
             }
@@ -181,7 +183,11 @@ namespace AgentEscape.VoiceAI
                 Say("로컬 테스트 모드에서는 채팅으로 명령해 주세요.");
                 return;
             }
-            if (!EnsureApiReady()) return;
+            if (!EnsureApiReady())
+            {
+                Say(StartupError);
+                return;
+            }
             var id = BeginInput();
             if (!_runner.IsCurrent(id)) return;
             try { _recorder.Start(); SetState(VoiceAgentState.Recording); }
@@ -200,9 +206,9 @@ namespace AgentEscape.VoiceAI
         /// <summary>새 플레이어 명령이 이전 작업을 대체한다. 로컬 중지는 모든 입력 상태에서 우선한다.</summary>
         public bool SendChat(string text)
         {
+            if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(text)) return false;
             if (AgentCommandRules.IsStop(text)) { RequestStop(); return true; }
             if (AgentCommandRules.IsResumeExploration(text)) { ResumeExploration(); return true; }
-            if (!isActiveAndEnabled || string.IsNullOrWhiteSpace(text)) return false;
             var id = BeginInput();
             if (_runner.IsCurrent(id)) _ = RouteTextAsync(id, text, _request.Token);
             return true;
@@ -224,7 +230,7 @@ namespace AgentEscape.VoiceAI
                 Say(message);
                 return Task.CompletedTask;
             }
-            if (TrySubmitCarryCommand(id, text)) return Task.CompletedTask;
+            if (TrySubmitBoxPuzzleCommand(id, text) || TrySubmitCarryCommand(id, text)) return Task.CompletedTask;
             var pending = _pendingCommand;
             if (pending != null)
             {
@@ -276,9 +282,25 @@ namespace AgentEscape.VoiceAI
                 ResolveCommandTarget(id, CreatePending(new[] { verb }, pickupSelector), pickupSelector);
                 return true;
             }
+            if (SceneCommandTargeting.TryParseDoorOpen(text, out string doorSelector))
+            {
+                var context = _stage.BuildForCommand();
+                _runner.PopulateCommandContext(context, _previousAction);
+                if (doorSelector.Length > 0 && commandRouting == AgentCommandRouting.PreferLocal &&
+                    SceneCommandTargeting.ResolveButtonSelection(doorSelector, context, doorsOnly: true).Count == 0 &&
+                    EnsureApiReady()) return false;
+                ResolveCommandTarget(id, CreatePending(new[] { AgentVocabulary.Press }, doorSelector, doorsOnly: true),
+                    doorSelector, useButtonContext: true);
+                return true;
+            }
             if (!SceneCommandTargeting.TryParseButtonPlan(text, out string selector, out bool useSelected, out var verbs))
                 return false;
 
+            if (!useSelected && selector.Length == 0 && _stage.BuildForCommand().Objects.Any(item => item.ButtonRoomId > 0))
+            {
+                ResolveCommandTarget(id, CreatePending(verbs, selector, buttonsOnly: true), selector, useButtonContext: true);
+                return true;
+            }
             var target = useSelected ? _runner.SelectedTarget : null;
             string error;
             if (useSelected)
@@ -292,10 +314,11 @@ namespace AgentEscape.VoiceAI
                     if (commandRouting == AgentCommandRouting.PreferLocal && EnsureApiReady()) return false;
                     var context = _stage.BuildForCommand();
                     var buttonIds = context.Objects.Where(SceneCommandTargeting.IsButton).Select(item => item.Id).ToArray();
-                    var matches = SceneCommandTargeting.ResolveSelection(selector, context, buttonIds);
+                    _runner.PopulateCommandContext(context, _previousAction);
+                    var matches = SceneCommandTargeting.ResolveButtonSelection(selector, context, buttonIds);
                     if (matches.Count > 0)
                     {
-                        ResolveCommandTarget(id, CreatePending(verbs, selector, buttonsOnly: true), selector);
+                        ResolveCommandTarget(id, CreatePending(verbs, selector, buttonsOnly: true), selector, useButtonContext: true);
                         return true;
                     }
                 }
@@ -312,6 +335,105 @@ namespace AgentEscape.VoiceAI
             SubmitTarget(id, verbs, target, _stage.BuildForCommand());
             return true;
         }
+
+        private bool TrySubmitBoxPuzzleCommand(AgentCommandId id, string text)
+        {
+            var placement = _stage.boxPlacement;
+            if (placement == null) return false;
+            if (SceneCommandTargeting.TryParseDoorOpen(text, out string doorSelector) &&
+                (SceneCommandTargeting.IsSecondDoorSelector(doorSelector) ||
+                    (doorSelector.Length == 0 && placement.RoomId > 0 &&
+                        _stage.BuildForCommand().ButtonRoomId == placement.RoomId)))
+            {
+                _pendingCommand = null;
+                RejectTarget(id, "초록색 버튼으로 상자를 떨어뜨린 뒤 상자를 문 여는 발판 위에 놓아 주세요.");
+                return true;
+            }
+            if (!SceneCommandTargeting.TryParseBoxPuzzleCommand(text, out var mode, out string boxSelector, out string padSelector))
+            {
+                if (!SceneCommandTargeting.TryParseTargetCommand(text, out string verb, out string selector) ||
+                    !selector.Contains("상자")) return false;
+                ResolveCommandTarget(id, CreatePending(new[] { verb }, selector), selector);
+                return true;
+            }
+
+            var held = CurrentHeldObject;
+            if (mode == SceneCommandTargeting.BoxPuzzleAction.Release && held != null) return false;
+
+            _pendingCommand = null;
+            var context = _stage.BuildForCommand();
+            _runner.PopulateCommandContext(context, _previousAction);
+            string error = placement.ConfigurationError();
+            if (error != null) { RejectTarget(id, error); return true; }
+            var box = placement.box;
+            if (mode == SceneCommandTargeting.BoxPuzzleAction.Release)
+            {
+                if (!context.Objects.Any(item => item.Id == box.id))
+                    context.Objects.Add(box.ToStageObject());
+                var releaseScope = BoxIdsInRoom(context, placement.RoomId).Append(box.id).Distinct().ToArray();
+                var matches = SceneCommandTargeting.ResolveSelection(boxSelector, context, releaseScope);
+                var release = placement.releaseButton.GetComponent<AgentInteractable>();
+                if (matches.Count != 1 || matches[0].Id != box.id || release == null ||
+                    !_stage.TryResolve(release.id, out var registered) || registered != release)
+                    RejectTarget(id, "떨어뜨릴 상자를 하나로 확인할 수 없습니다. 초록색 버튼의 이름을 알려 주세요.");
+                else SubmitTarget(id, new[] { AgentVocabulary.Press }, release, context);
+                return true;
+            }
+
+            if (context.ButtonRoomId != placement.RoomId)
+            {
+                RejectTarget(id, "상자와 발판이 있는 구역에 먼저 들어가 주세요.");
+                return true;
+            }
+            var pads = SceneCommandTargeting.ResolveSelection(padSelector, context);
+            if (pads.Count != 1 || !_stage.TryResolvePlacement(pads[0].Id, out var resolved) || resolved != placement)
+            {
+                RejectTarget(id, "상자를 놓을 발판을 하나로 확인할 수 없습니다. 발판의 정확한 이름을 알려 주세요.");
+                return true;
+            }
+
+            bool pickUp = held == null && mode == SceneCommandTargeting.BoxPuzzleAction.PickUpAndPlace;
+            if (!pickUp && held != box)
+            {
+                RejectTarget(id, held == null ? "발판으로 옮길 상자를 먼저 집어 주세요." : "들고 있는 물체를 내려놓고 지정된 상자를 집어 주세요.");
+                return true;
+            }
+
+            if (!_stage.TryResolve(box.id, out var available) || available != box)
+            {
+                RejectTarget(id, "상자를 떨어뜨린 뒤 바닥에 멈추면 집을 수 있습니다.");
+                return true;
+            }
+            var scope = held == null ? BoxIdsInRoom(context, context.ButtonRoomId) : new[] { held.id };
+            if (held != null) context.SelectedTargetId = held.id;
+            var boxes = SceneCommandTargeting.ResolveSelection(boxSelector, context, scope);
+            if (boxes.Count != 1 || boxes[0].Id != box.id)
+            {
+                RejectTarget(id, "옮길 상자를 하나로 확인할 수 없습니다. 상자의 이름을 알려 주세요.");
+                return true;
+            }
+
+            string padId = pads[0].Id;
+            var actions = new List<AgentAction>();
+            if (pickUp) actions.Add(new AgentAction { Verb = AgentVocabulary.PickUp, Target = box.id });
+            actions.Add(new AgentAction { Verb = AgentVocabulary.MoveTo, Target = padId, PlacementTargetId = padId });
+            if (mode != SceneCommandTargeting.BoxPuzzleAction.Travel)
+                actions.Add(new AgentAction { Verb = AgentVocabulary.Drop, Target = box.id, PlacementTargetId = padId });
+            var targets = new Dictionary<string, AgentInteractable>(StringComparer.Ordinal)
+                { [box.id] = box, [padId] = placement.Interactable };
+            foreach (var action in actions)
+            {
+                error = AgentResponseParser.CheckAction(action, context, Trust, checkInventory: false);
+                if (error != null) { RejectTarget(id, error); return true; }
+            }
+            _runner.Submit(id, actions, null, targets, requiredHeldObject: held);
+            return true;
+        }
+
+        private string[] BoxIdsInRoom(StageContext context, int roomId) => context.Objects.Where(item =>
+            item.AllowedVerbs.Contains(AgentVocabulary.PickUp) && SceneCommandTargeting.IsBox(item) &&
+            _stage.TryResolve(item.Id, out var target) && _stage.ButtonRoomAt(target.transform.position) == roomId)
+            .Select(item => item.Id).ToArray();
 
         private bool TrySubmitCarryCommand(AgentCommandId id, string text)
         {
@@ -353,12 +475,13 @@ namespace AgentEscape.VoiceAI
             return true;
         }
 
-        private static PendingCommand CreatePending(string[] verbs, string selector, bool buttonsOnly = false)
+        private static PendingCommand CreatePending(string[] verbs, string selector, bool buttonsOnly = false, bool doorsOnly = false)
         {
             return new PendingCommand
             {
                 Verbs = verbs,
                 ButtonsOnly = buttonsOnly || verbs.Any(verb => verb == AgentVocabulary.Press || verb == AgentVocabulary.Interact),
+                DoorsOnly = doorsOnly,
                 BoxesOnly = !string.IsNullOrEmpty(selector) &&
                     (selector.Contains("상자") || selector.IndexOf("box", StringComparison.OrdinalIgnoreCase) >= 0),
                 CandidateIds = Array.Empty<string>()
@@ -366,17 +489,22 @@ namespace AgentEscape.VoiceAI
         }
 
         private void ResolveCommandTarget(AgentCommandId id, PendingCommand command, string selector, string lookupError = null,
-            IReadOnlyDictionary<string, AgentInteractable> originalTargets = null, int? originalTrust = null)
+            IReadOnlyDictionary<string, AgentInteractable> originalTargets = null, int? originalTrust = null, bool useButtonContext = false)
         {
             if (!_runner.IsCurrent(id)) return;
             var context = _stage.BuildForCommand();
             _runner.PopulateCommandContext(context, _previousAction);
+            var boxScope = command.BoxesOnly && _stage.boxPlacement != null ?
+                BoxIdsInRoom(context, context.ButtonRoomId) : null;
             var scope = context.Objects.Where(item =>
                 (!command.ButtonsOnly || SceneCommandTargeting.IsButton(item)) &&
+                (!command.DoorsOnly || item.DoorAliases.Count > 0) &&
                 (!command.BoxesOnly || SceneCommandTargeting.IsBox(item)) &&
+                (boxScope == null || boxScope.Contains(item.Id)) &&
                 (command.CandidateIds.Length < 2 || selector.Contains("말고") || command.CandidateIds.Contains(item.Id)))
                 .Select(item => item.Id).ToArray();
-            var selected = SceneCommandTargeting.ResolveSelection(selector, context, scope);
+            var selected = useButtonContext ? SceneCommandTargeting.ResolveButtonSelection(selector, context, scope, command.DoorsOnly) :
+                SceneCommandTargeting.ResolveSelection(selector, context, scope);
             if (lookupError == null && selected.Count == 1 && _stage.TryResolve(selected[0].Id, out var target))
             {
                 if (originalTargets == null || (originalTargets.TryGetValue(target.id, out var original) && original == target))
@@ -513,7 +641,17 @@ namespace AgentEscape.VoiceAI
                 if (rejection != null)
                 {
                     result.Response.Speech = rejection;
-                    if (groundingError != null) result.Response.Comprehension = AgentVocabulary.Asking;
+                    if (groundingError != null)
+                    {
+                        result.Response.Comprehension = AgentVocabulary.Asking;
+                        if (actions.Any(action => action.Verb == AgentVocabulary.Press || action.Verb == AgentVocabulary.Interact))
+                        {
+                            var candidates = SceneCommandTargeting.PressCandidateIds(text, context);
+                            if (candidates.Count > 1)
+                                _pendingCommand = new PendingCommand { Verbs = new[] { AgentVocabulary.Press }, ButtonsOnly = true,
+                                    CandidateIds = candidates.ToArray() };
+                        }
+                    }
                     result.Actions.Clear();
                 }
                 SetState(VoiceAgentState.Idle);
@@ -546,8 +684,10 @@ namespace AgentEscape.VoiceAI
 
             var pending = CreatePending(new[] { response.ClarifyVerb }, "");
             var context = _stage.BuildForCommand();
-            pending.CandidateIds = context.Objects.Where(item => !pending.ButtonsOnly || SceneCommandTargeting.IsButton(item))
-                .Select(item => item.Id).ToArray();
+            _runner.PopulateCommandContext(context, _previousAction);
+            pending.CandidateIds = pending.ButtonsOnly ? SceneCommandTargeting.PressCandidateIds(text, context).ToArray() :
+                context.Objects.Select(item => item.Id).ToArray();
+            if (pending.ButtonsOnly && pending.CandidateIds.Length < 2) return false;
             _pendingCommand = pending;
             RejectTarget(id, pending.ButtonsOnly ? "어느 버튼인가요? 이름이나 번호를 알려 주세요." :
                 "어느 대상인가요? 이름이나 색상을 알려 주세요.");

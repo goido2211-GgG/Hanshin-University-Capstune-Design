@@ -272,7 +272,11 @@ namespace AgentEscape.VoiceAI
     public static class OpenAIKeyProvider
     {
         public static bool Available = true;
-        public static string Load() => Available ? "unused-test-placeholder" : throw new InvalidOperationException("No test API key");
+        public static bool TryLoad(out string key)
+        {
+            key = Available ? "unused-test-placeholder" : null;
+            return Available;
+        }
     }
     public sealed class RecordedAudio { public byte[] Wav; public float Seconds; public float Rms; }
     public sealed class MicrophoneRecorder

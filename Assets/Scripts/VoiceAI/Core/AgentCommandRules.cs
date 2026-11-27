@@ -154,7 +154,7 @@ namespace AgentEscape.VoiceAI
         {
             Verb = action.Verb, Target = action.Target, Item = action.Item,
             Direction = action.Direction, Steps = action.Steps, Distance = action.Distance,
-            Angle = action.Angle, Text = action.Text
+            Angle = action.Angle, Text = action.Text, PlacementTargetId = action.PlacementTargetId
         };
     }
 }
