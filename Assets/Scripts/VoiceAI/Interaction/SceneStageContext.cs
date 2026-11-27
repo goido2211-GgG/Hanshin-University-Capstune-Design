@@ -11,6 +11,9 @@ namespace AgentEscape.VoiceAI
         [Range(0, 3), Tooltip("0: 잘 알아들음, 1: 가끔 오해, 2: 자주 오해, 3: 대부분 오해")]
         public int confusionLevel = 1;
         public string agentLocation = "방 중앙";
+        [Tooltip("방 1과 방 2 사이 통로 중심. Forward는 방 2를 향합니다.")]
+        public Transform buttonRoomThreshold;
+        public AgentPlacementTarget boxPlacement;
         private AgentBodyController _carryBody;
         public AgentInteractable CurrentHeldObject => _carryBody == null ? null : _carryBody.CurrentHeldObject;
 
@@ -101,6 +104,36 @@ namespace AgentEscape.VoiceAI
 
         internal StageContext BuildForCommand() => Build(includeDemo: false, includeSceneDetails: true);
 
+        private float PassageSide(Vector3 position)
+        {
+            Vector3 relative = position - buttonRoomThreshold.position;
+            Vector3 forward = buttonRoomThreshold.forward;
+            return relative.x * forward.x + relative.z * forward.z;
+        }
+
+        internal bool TryResolvePlacement(string id, out AgentPlacementTarget destination)
+        {
+            destination = boxPlacement;
+            return destination != null && destination.isActiveAndEnabled &&
+                TryResolve(id, out var item) && destination.Interactable == item;
+        }
+
+        internal int ButtonRoomAt(Vector3 position)
+        {
+            if (buttonRoomThreshold == null) return 0;
+            float side = PassageSide(position);
+            return side < -0.25f ? 1 : side > 0.25f ? 2 : 0;
+        }
+
+        internal bool TryGetButtonPassage(Vector3 from, Vector3 to, out Vector3 waypoint)
+        {
+            waypoint = default;
+            if (buttonRoomThreshold == null || PassageSide(from) * PassageSide(to) >= 0f) return false;
+            waypoint = buttonRoomThreshold.position;
+            waypoint.y = from.y;
+            return true;
+        }
+
         private StageContext Build(bool includeDemo, bool includeSceneDetails)
         {
             var context = new StageContext
@@ -111,6 +144,9 @@ namespace AgentEscape.VoiceAI
                 AgentLocation = agentLocation
             };
             CopyInventoryTo(context.Inventory);
+            Vector3? bodyPosition = includeSceneDetails && _carryBody != null && _carryBody.isActiveAndEnabled
+                ? _carryBody.transform.position : (Vector3?)null;
+            if (bodyPosition.HasValue) context.ButtonRoomId = ButtonRoomAt(bodyPosition.Value);
 
             var items = new Dictionary<string, AgentInteractable>(System.StringComparer.Ordinal);
             foreach (var item in AgentInteractable.Active)
@@ -147,6 +183,10 @@ namespace AgentEscape.VoiceAI
                     {
                         if (button.aliases != null) description.Aliases.AddRange(button.aliases);
                         description.CanInteract = button.ConfigurationError() == null;
+                        description.ButtonRoomId = button.roomId;
+                        if (button.doorAliases != null) description.DoorAliases.AddRange(button.doorAliases);
+                        if (bodyPosition.HasValue && button.approachPoint != null)
+                            description.ButtonApproachDistance = Vector3.Distance(bodyPosition.Value, button.approachPoint.position);
                     }
                     else
                     {

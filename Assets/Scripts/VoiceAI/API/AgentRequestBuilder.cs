@@ -75,6 +75,13 @@ namespace AgentEscape.VoiceAI
             text.AppendLine("상황: " + Limit(context.Brief, 200));
             text.AppendLine("요원 위치: " + Limit(context.AgentLocation) + Position(context.AgentPositionX, context.AgentPositionY, context.AgentPositionZ));
             if (context.AgentHeading.HasValue) text.AppendLine("요원 월드 Y축 방향(도): " + Format(context.AgentHeading.Value));
+            if (context.ButtonRoomId > 0)
+            {
+                text.AppendLine("요원이 있는 방 번호: " + context.ButtonRoomId);
+                var currentButtons = SceneCommandTargeting.ResolveButtonSelection("", context);
+                if (currentButtons.Count == 1 && currentButtons[0].CanInteract == true)
+                    text.AppendLine("현재 문맥에서 특정되는 버튼 ID: " + Limit(currentButtons[0].Id));
+            }
             text.AppendLine("신뢰도: " + trust + "/100");
             text.AppendLine("현재 들고 있는 물체 ID: " + (context.Inventory.Count == 0 ? "없음" : string.Join(", ", context.Inventory)));
             if (!string.IsNullOrEmpty(context.SelectedTargetId))
@@ -101,6 +108,10 @@ namespace AgentEscape.VoiceAI
                 var aliases = item.Aliases.Where(alias => !string.IsNullOrWhiteSpace(alias))
                     .Select(alias => Limit(alias.Trim(), 40)).Distinct(System.StringComparer.OrdinalIgnoreCase).Take(6).ToArray();
                 if (aliases.Length > 0) text.Append(" / 별칭: ").Append(string.Join(", ", aliases));
+                if (item.ButtonRoomId > 0) text.Append(" / 소속 방: ").Append(item.ButtonRoomId);
+                var doors = item.DoorAliases.Where(alias => !string.IsNullOrWhiteSpace(alias)).Take(6);
+                if (item.DoorAliases.Count > 0)
+                    text.Append(" / 이 버튼으로 여는 문: ").Append(string.Join(", ", doors.Select(alias => Limit(alias, 40))));
                 if (!string.IsNullOrWhiteSpace(item.Color)) text.Append(" / 지정 색상: ").Append(Limit(item.Color.Trim(), 40));
                 if (!string.IsNullOrWhiteSpace(item.Description)) text.Append(" / 설명: ").Append(Limit(item.Description, 160));
                 if (!string.IsNullOrWhiteSpace(item.State)) text.Append(" / 상태: ").Append(Limit(item.State));

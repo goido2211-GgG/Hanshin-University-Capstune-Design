@@ -44,7 +44,10 @@ namespace AgentEscape.VoiceAI
         private bool _changingCarry;
         private bool _releaseCarryRequested;
         private Vector3 _destination;
+        private Vector3? _buttonDestination;
         private AgentButton _button;
+        private AgentPlacementTarget _placement;
+        private float _targetReach;
         private bool _moving;
         private float _remainingWait;
         private float _remainingAngle;
@@ -88,6 +91,8 @@ namespace AgentEscape.VoiceAI
             _action = null;
             _target = null;
             _button = null;
+            _placement = null;
+            _buttonDestination = null;
             _moving = false;
             _remainingAngle = 0f;
             AgentEventDispatch.Invoke(MotionUpdated, 0f);
@@ -133,6 +138,20 @@ namespace AgentEscape.VoiceAI
             if (!stage.TryResolve(action.Target, out _target)) return "대상이 없거나 ID가 중복되었습니다: " + action.Target;
             string carryError = CheckCarryAction(action, _target);
             if (carryError != null) return carryError;
+            if (action.PlacementTargetId != null)
+            {
+                if (!stage.TryResolvePlacement(action.PlacementTargetId, out _placement))
+                    return "배치할 발판을 찾을 수 없습니다.";
+                string error = _placement.ConfigurationError();
+                if (error != null) return error;
+                if (action.Verb == AgentVocabulary.MoveTo)
+                {
+                    _destination = _placement.approachPoint.position;
+                    _destination.y = transform.position.y;
+                    _moving = !_placement.IsAtApproach(transform.position);
+                    return _moving ? MovementError() : null;
+                }
+            }
             if (action.Verb == AgentVocabulary.Drop) return null;
             _button = _target.Button;
             if (action.Verb == AgentVocabulary.Press)
@@ -146,14 +165,29 @@ namespace AgentEscape.VoiceAI
             {
                 _destination = _button.approachPoint.position;
                 _destination.y = transform.position.y;
+                if (_button.roomId > 0 && stage.TryGetButtonPassage(transform.position, _destination, out var waypoint) &&
+                    (waypoint - transform.position).sqrMagnitude > 0.0001f)
+                {
+                    _buttonDestination = _destination;
+                    _destination = waypoint;
+                }
                 _moving = (_destination - transform.position).sqrMagnitude > 0.0001f;
                 return _moving ? MovementError() : null;
             }
             Vector3 offset = _target.transform.position - transform.position;
             offset.y = 0f;
-            float distance = Mathf.Max(0.05f, stopDistance);
-            _destination = offset.magnitude > distance
-                ? _target.transform.position - offset.normalized * distance : transform.position;
+            _targetReach = Mathf.Max(0.05f, stopDistance);
+            if (action.Verb == AgentVocabulary.PickUp && stage.boxPlacement != null &&
+                _target == stage.boxPlacement.box)
+            {
+                Physics.SyncTransforms();
+                float boxRadius = 0f;
+                foreach (var collider in _target.GetComponentsInChildren<Collider>(false))
+                    boxRadius = Mathf.Max(boxRadius, PlanarExtent(collider, _target.transform.position));
+                _targetReach = Mathf.Max(_targetReach, obstacleRadius + boxRadius + 0.08f);
+            }
+            _destination = offset.magnitude > _targetReach
+                ? _target.transform.position - offset.normalized * _targetReach : transform.position;
             _destination.y = transform.position.y;
             _moving = (_destination - transform.position).sqrMagnitude > 0.0001f;
             return _moving ? MovementError() : null;
@@ -235,12 +269,13 @@ namespace AgentEscape.VoiceAI
             finally { _changingCarry = false; }
         }
 
-        private string TryPickUp(AgentAction action, AgentInteractable target)
+        private string TryPickUp(AgentAction action, AgentInteractable target, bool puzzleBox)
         {
             string error = CheckCarryAction(action, target);
             if (error != null) return error;
 
             var attachment = new CarryAttachment(target);
+            if (puzzleBox && !IsFinite(attachment.BottomOffset)) return "상자의 충돌체를 찾지 못했습니다.";
             var previousParent = attachment.Root.parent;
             Vector3 previousPosition = attachment.Root.position;
             _changingCarry = true;
@@ -250,7 +285,9 @@ namespace AgentEscape.VoiceAI
                 attachment.Root.SetParent(transform, true);
                 if (_releaseCarryRequested || !isActiveAndEnabled || !IsAttached(attachment))
                     return "물체를 로봇에 부착하지 못했습니다.";
-                attachment.Root.localPosition = Vector3.up * carryHeight;
+                attachment.Root.localPosition = puzzleBox
+                    ? new Vector3(0f, Mathf.Max(carryHeight, obstacleHeight * 0.5f), obstacleRadius + attachment.PlanarRadius + 0.08f)
+                    : Vector3.up * carryHeight;
                 _carry = attachment;
                 return null;
             }
@@ -288,16 +325,21 @@ namespace AgentEscape.VoiceAI
 
             var attachment = _carry;
             Physics.SyncTransforms();
-            float bodyRadius = IsFinite(obstacleRadius) ? Mathf.Max(0.05f, obstacleRadius) : 0.05f;
-            foreach (var collider in GetComponentsInChildren<Collider>(false))
-                bodyRadius = Mathf.Max(bodyRadius, PlanarExtent(collider, transform.position));
-            float clearance = bodyRadius + attachment.PlanarRadius + 0.05f;
-            if (!IsFinite(clearance)) return "내려놓을 위치를 계산하지 못했습니다.";
-            Vector3 forward = transform.forward;
-            forward.y = 0f;
-            if (!IsFinite(forward.sqrMagnitude) || forward.sqrMagnitude < 0.0001f)
-                return "로봇의 수평 방향을 확인할 수 없습니다.";
-            Vector3 dropPosition = transform.position + forward.normalized * Mathf.Max(clearance, stopDistance);
+            Vector3 dropPosition;
+            if (_placement != null)
+            {
+                Bounds bounds = _placement.support.bounds;
+                if (!_placement.IsAtApproach(transform.position) ||
+                    !_placement.CanReachSupport(transform.position, bounds) || !IsFinite(attachment.BottomOffset))
+                    return "발판에 상자를 내려놓을 수 있는 위치에 도착하지 못했습니다.";
+                dropPosition = bounds.center;
+                dropPosition.y += bounds.extents.y + 0.04f - attachment.BottomOffset;
+            }
+            else
+            {
+                string positionError = GetDropPosition(attachment, out dropPosition);
+                if (positionError != null) return positionError;
+            }
             _changingCarry = true;
             try
             {
@@ -317,6 +359,22 @@ namespace AgentEscape.VoiceAI
             }
         }
 
+        private string GetDropPosition(CarryAttachment attachment, out Vector3 dropPosition)
+        {
+            dropPosition = default;
+            float bodyRadius = IsFinite(obstacleRadius) ? Mathf.Max(0.05f, obstacleRadius) : 0.05f;
+            foreach (var collider in GetComponentsInChildren<Collider>(false))
+                bodyRadius = Mathf.Max(bodyRadius, PlanarExtent(collider, transform.position));
+            float clearance = bodyRadius + attachment.PlanarRadius + 0.05f;
+            if (!IsFinite(clearance)) return "내려놓을 위치를 계산하지 못했습니다.";
+            Vector3 forward = transform.forward;
+            forward.y = 0f;
+            if (!IsFinite(forward.sqrMagnitude) || forward.sqrMagnitude < 0.0001f)
+                return "로봇의 수평 방향을 확인할 수 없습니다.";
+            dropPosition = transform.position + forward.normalized * Mathf.Max(clearance, stopDistance);
+            return null;
+        }
+
         private static float PlanarExtent(Collider collider, Vector3 reference)
         {
             if (collider == null || !collider.enabled || collider.isTrigger) return 0f;
@@ -333,6 +391,7 @@ namespace AgentEscape.VoiceAI
             internal readonly AgentInteractable Target;
             internal readonly Transform Root;
             internal readonly float PlanarRadius;
+            internal readonly float BottomOffset = float.PositiveInfinity;
             private readonly (Rigidbody Body, bool WasKinematic)[] _bodies;
             private readonly (Collider Collider, bool WasEnabled)[] _colliders;
             private bool _physicsSuspended;
@@ -350,7 +409,13 @@ namespace AgentEscape.VoiceAI
                 for (int i = 0; i < colliders.Length; i++)
                 {
                     _colliders[i] = (colliders[i], colliders[i].enabled);
-                    PlanarRadius = Mathf.Max(PlanarRadius, PlanarExtent(colliders[i], Root.position));
+                    float extent = PlanarExtent(colliders[i], Root.position);
+                    PlanarRadius = Mathf.Max(PlanarRadius, extent);
+                    if (extent > 0f)
+                    {
+                        Bounds bounds = colliders[i].bounds;
+                        BottomOffset = System.Math.Min(BottomOffset, bounds.center.y - bounds.extents.y - Root.position.y);
+                    }
                 }
             }
 
@@ -447,6 +512,12 @@ namespace AgentEscape.VoiceAI
                 transform.position = nextPosition;
                 AgentEventDispatch.Invoke(MotionUpdated, deltaTime);
                 if ((_destination - transform.position).sqrMagnitude > 0.0001f) return false;
+                if (_buttonDestination.HasValue)
+                {
+                    _destination = _buttonDestination.Value;
+                    _buttonDestination = null;
+                    return false;
+                }
                 _moving = false;
                 // 조작은 다음 프레임에 수행하여 접근 직후 최신 검증을 한 번 더 거친다.
                 return false;
@@ -458,11 +529,25 @@ namespace AgentEscape.VoiceAI
                     Vector3.Distance(transform.position, _button.approachPoint.position) > _button.interactionDistance)
                 { message = "버튼 접근 지점의 조작 거리 안에 도착하지 못했습니다."; return true; }
             }
+            else if (_placement != null && _action.Verb == AgentVocabulary.MoveTo)
+            {
+                if (!_placement.IsAtApproach(transform.position))
+                { message = "발판에 접근하지 못했습니다."; return true; }
+                Vector3 direction = _placement.support.bounds.center - transform.position;
+                direction.y = 0f;
+                if ((transform.forward - direction.normalized).sqrMagnitude > 0.0001f && direction.sqrMagnitude > 0.0001f)
+                {
+                    message = TurningError();
+                    if (message != null) return true;
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), turnSpeed * deltaTime);
+                    return false;
+                }
+            }
             else if (_target != null && _action.Verb != AgentVocabulary.Drop)
             {
                 Vector3 offset = _target.transform.position - transform.position;
                 offset.y = 0f;
-                if (offset.magnitude > Mathf.Max(0.05f, stopDistance) + 0.05f)
+                if (offset.magnitude > _targetReach + 0.05f)
                 { message = "대상이 이동하여 조작 거리를 벗어났습니다."; return true; }
             }
             switch (_action.Verb)
@@ -484,11 +569,12 @@ namespace AgentEscape.VoiceAI
                     string buttonName = _target.displayName;
                     message = _button.TryPress();
                     if (message != null) { Debug.LogWarning("[VoiceAI] " + message, this); return true; }
-                    message = buttonName + " 버튼 이벤트를 실행했습니다.";
+                    stage.agentLocation = buttonName + " 앞";
+                    message = buttonName + "을(를) 눌렀습니다.";
                     break;
                 case AgentVocabulary.PickUp:
                     string pickedName = _target.displayName;
-                    message = TryPickUp(_action, _target);
+                    message = TryPickUp(_action, _target, stage.boxPlacement != null && _target == stage.boxPlacement.box);
                     if (message != null) return true;
                     message = pickedName + "을(를) 집었습니다.";
                     break;
@@ -496,7 +582,7 @@ namespace AgentEscape.VoiceAI
                     string droppedName = _target.displayName;
                     message = TryDrop(_action, _target);
                     if (message != null) return true;
-                    message = droppedName + "을(를) 내려놓았습니다.";
+                    message = droppedName + (_placement != null ? "을(를) 발판 위에 내려놓았습니다." : "을(를) 내려놓았습니다.");
                     break;
                 default: message = "지원하지 않는 행동입니다."; return true;
             }

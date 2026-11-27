@@ -154,7 +154,8 @@ public class PauseMenu : MonoBehaviour
     // ★ 추가: 채팅 입력 중이면 true
     private bool IsChatting()
     {
-        return modeSwitcher != null && modeSwitcher.InputSuppressed;
+        return AgentEscape.VoiceAI.FirstMapVoiceInput.CapturesEscape ||
+            (modeSwitcher != null && modeSwitcher.InputSuppressed);
     }
 
     // ★ 추가(옮김): 버튼이 파란 "선택됨" 상태로 남지 않게 선택 해제

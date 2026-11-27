@@ -15,19 +15,28 @@ namespace AgentEscape.VoiceAI
 
         public static string Load()
         {
+            if (TryLoad(out string apiKey)) return apiKey;
+            throw new AgentApiException("OpenAI API 키가 없습니다. " + RelativeKeyPath + " 파일을 만들어 키를 넣어 주세요.");
+        }
+
+        internal static bool TryLoad(out string apiKey)
+        {
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
             string path = Path.Combine(projectRoot, RelativeKeyPath);
 
             if (File.Exists(path))
             {
                 string fromFile = File.ReadAllText(path).Trim();
-                if (fromFile.Length > 0) return fromFile;
+                if (fromFile.Length > 0)
+                {
+                    apiKey = fromFile;
+                    return true;
+                }
             }
 
             string fromEnvironment = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-            if (!string.IsNullOrWhiteSpace(fromEnvironment)) return fromEnvironment.Trim();
-
-            throw new AgentApiException("OpenAI API 키가 없습니다. " + path + " 파일을 만들어 키를 넣어 주세요.");
+            apiKey = fromEnvironment?.Trim();
+            return !string.IsNullOrEmpty(apiKey);
         }
     }
 }

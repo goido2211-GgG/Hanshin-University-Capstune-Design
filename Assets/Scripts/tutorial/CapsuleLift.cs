@@ -7,6 +7,7 @@ public class CapsuleLift : MonoBehaviour
     [SerializeField] private float liftSpeed = 3f;
 
     private bool isLifted = false;
+    public bool HasFinished { get; private set; }
 
     public void LiftCapsule()
     {
@@ -30,5 +31,6 @@ public class CapsuleLift : MonoBehaviour
         }
 
         transform.position = targetPos;
+        HasFinished = true;
     }
 }

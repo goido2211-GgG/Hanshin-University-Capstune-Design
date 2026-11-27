@@ -106,6 +106,54 @@ internal static class BehaviorTests
         return button;
     }
 
+    private static (ButtonReceiver First, ButtonReceiver Second) ConfigureRoomButtons(Fixture fixture)
+    {
+        fixture.Stage.buttonRoomThreshold = new GameObject().transform;
+        fixture.Stage.buttonRoomThreshold.position = new Vector3(0, 0, 5);
+        var first = CreateButton("gate_1", "첫 번째 문 버튼", new Vector3(4, 0, 3), "1번");
+        first.roomId = 1;
+        first.doorAliases.AddRange(new[] { "첫 번째 문", "첫 번째 출입문" });
+        var second = CreateButton("gate_2", "두 번째 문 버튼", new Vector3(4, 0, 8), "2번");
+        second.roomId = 2;
+        second.doorAliases.AddRange(new[] { "두 번째 문", "두 번째 출입문" });
+        var firstReceiver = first.gameObject.AddComponent<ButtonReceiver>();
+        var secondReceiver = second.gameObject.AddComponent<ButtonReceiver>();
+        first.receiver = firstReceiver;
+        second.receiver = secondReceiver;
+        return (firstReceiver, secondReceiver);
+    }
+
+    private static (AgentPlacementTarget Pad, ButtonReceiver Release, ButtonReceiver First, Rigidbody BoxBody, Collider BoxCollider)
+        ConfigureBoxPuzzle(Fixture fixture)
+    {
+        fixture.Stage.buttonRoomThreshold = new GameObject().transform;
+        fixture.Stage.buttonRoomThreshold.position = new Vector3(0, 0, 5);
+        fixture.Box.transform.position = new Vector3(0, 0, 7);
+        var first = CreateButton("gate_1", "첫 번째 문 버튼", new Vector3(1, 0, 2));
+        first.roomId = 1;
+        first.doorAliases.Add("첫 번째 문");
+        var firstReceiver = first.gameObject.AddComponent<ButtonReceiver>();
+        first.receiver = firstReceiver;
+        var green = CreateButton("crate_release_button", "초록색 버튼", new Vector3(0, 0, 6), "초록 버튼", "상자 낙하 버튼");
+        green.roomId = 2;
+        var release = green.gameObject.AddComponent<ButtonReceiver>();
+        green.receiver = release;
+        var pad = new GameObject().AddComponent<AgentInteractable>();
+        pad.id = "crate_pressure_plate";
+        pad.displayName = "압력 발판";
+        pad.aliases.AddRange(new[] { "발판", "문 여는 발판", "상자 발판" });
+        pad.transform.position = new Vector3(4, 0, 9);
+        var placement = pad.gameObject.AddComponent<AgentPlacementTarget>();
+        placement.support = pad.gameObject.AddComponent<Collider>();
+        placement.approachPoint = new GameObject().transform;
+        placement.approachPoint.position = new Vector3(2, 0, 9);
+        placement.box = fixture.Box;
+        placement.releaseButton = green;
+        fixture.Stage.boxPlacement = placement;
+        return (placement, release, firstReceiver, fixture.Box.gameObject.AddComponent<Rigidbody>(),
+            fixture.Box.gameObject.AddComponent<Collider>());
+    }
+
     private static async Task Test(string name, Func<Task> run)
     {
         try
@@ -583,6 +631,71 @@ internal static class BehaviorTests
                 f.Endings.Last().Outcome == AgentExecutionOutcome.Completed && !f.Voice.ApiReady, "wrong press");
             f.Voice.SendChat("2번 버튼을 눌러"); f.Tick(10, 200);
             Check(redReceiver.PressCount == 1 && blueReceiver.PressCount == 1, "wrong numbered button");
+        }));
+        await Test("local room buttons require arrival, traverse the door and keep events independent", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.commandRouting = AgentCommandRouting.LocalOnly;
+            var buttons = ConfigureRoomButtons(f);
+            f.Voice.SendChat("문 열어"); f.Tick(1.5f, 30);
+            Check(f.Body.IsMoving && buttons.First.PressCount == 0 && buttons.Second.PressCount == 0, "pressed before arrival");
+            f.Tick(4, 80);
+            Check(buttons.First.PressCount == 1 && buttons.Second.PressCount == 0 && f.Body.transform.position.z == 3,
+                "current room did not supply the first gate");
+
+            var obstacle = new GameObject().AddComponent<Collider>();
+            Physics.CapsuleCast = (bottom, top, radius, direction, distance) =>
+                bottom.z < 5f && bottom.z + direction.z * distance >= 5f ? obstacle : null;
+            f.Voice.SendChat("두 번째 문 열어"); f.Tick(8, 160);
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Failed && buttons.Second.PressCount == 0,
+                "an obstructed door crossing activated the second gate");
+
+            Physics.CapsuleCast = null;
+            bool passedThroughMarker = false;
+            f.Body.MotionUpdated += delta => passedThroughMarker |=
+                Vector3.Distance(f.Body.transform.position, f.Stage.buttonRoomThreshold.position) < 0.01f;
+            f.Voice.SendChat("두 번째 문 열어"); f.Tick(8, 160);
+            f.Voice.SendChat("저 버튼 눌러"); f.Tick(4, 80);
+            f.Voice.SendChat("버튼 눌러"); f.Tick(4, 80);
+            Check(passedThroughMarker && buttons.First.PressCount == 1 && buttons.Second.PressCount == 3 && !f.Voice.ApiReady,
+                "the second room did not supply its own button after crossing");
+        }));
+        await Test("at the door threshold a generic press asks for a target", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            f.Voice.commandRouting = AgentCommandRouting.LocalOnly;
+            var buttons = ConfigureRoomButtons(f);
+            f.Body.transform.position = f.Stage.buttonRoomThreshold.position;
+            f.Voice.SendChat("저 버튼 눌러");
+            Check(f.Voice.IsAwaitingTarget && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected &&
+                buttons.First.PressCount == 0 && buttons.Second.PressCount == 0, "ambiguous threshold press guessed a gate");
+            f.Voice.SendChat("두 번째 문"); f.Tick(6, 120);
+            Check(buttons.First.PressCount == 0 && buttons.Second.PressCount == 1, "clarification did not resume the correct press");
+        }));
+        await Test("API door interpretation is anchored to scene context or an authored door", () => Sync(() =>
+        {
+            var f = new Fixture();
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            var buttons = ConfigureRoomButtons(f);
+            int apiCalls = 0;
+            string snapshot = null;
+            OpenAIClient.Response = (request, token) =>
+            {
+                ++apiCalls;
+                snapshot = (string)request["input"][0]["content"];
+                return Task.FromResult(Reply(0, new AgentAction { Verb = AgentVocabulary.Interact,
+                    Target = apiCalls == 1 ? "gate_2" : "gate_1" }));
+            };
+            f.Voice.SendChat("문 열어");
+            Check(f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected && apiCalls == 1 &&
+                buttons.Second.PressCount == 0 && snapshot.Contains("현재 문맥에서 특정되는 버튼 ID: gate_1"),
+                "the model overrode the current-room target or lacked its context");
+            f.Voice.SendChat("탈출할 수 있게 첫 번째 출입문을 개방해 주시겠어요?"); f.Tick(6, 120);
+            Check(apiCalls == 2 && buttons.First.PressCount == 1 && buttons.Second.PressCount == 0,
+                "the free-form API command did not activate its authored door");
+            f.Voice.SendChat("첫 번째 문을 열어 주면 안 돼."); f.Tick(6, 120);
+            Check(apiCalls == 3 && buttons.First.PressCount == 1 && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected,
+                "a prohibition was interpreted as a press");
         }));
         await Test("button without listener fails and a moving press can be cancelled", () => Sync(() =>
         {
@@ -1190,6 +1303,77 @@ internal static class BehaviorTests
             f.Voice.SendChat("빨간 상자를 집고 나서 내려놓아"); f.Tick(10, 200);
             Check(f.Actions.Count == 2 && f.Body.CurrentHeldObject == null && f.Body.LastDroppedObject == f.Box &&
                 f.Endings.Last().Outcome == AgentExecutionOutcome.Completed, "API lost carry state between steps");
+        }));
+        await Test("room one door still works and room two release reuses the green button", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var puzzle = ConfigureBoxPuzzle(f);
+            f.Box.enabled = false;
+            f.Voice.SendChat("문 열어"); f.Tick(5, 100);
+            Check(puzzle.First.PressCount == 1 && puzzle.Release.PressCount == 0, "room one door routing changed");
+            f.Voice.SendChat("상자 떨어뜨려"); f.Tick(5, 100);
+            Check(puzzle.Release.PressCount == 1 && f.Stage.BuildForCommand().ButtonRoomId == 2,
+                "release did not approach the configured green button through the passage");
+            f.Voice.SendChat("초록색 버튼 눌러"); f.Tick(5, 100);
+            Check(puzzle.Release.PressCount == 2 && puzzle.First.PressCount == 1, "green button did not use the existing adapter");
+            foreach (string text in new[] { "문 열어", "두 번째 문 열어" }) f.Voice.SendChat(text);
+            Check(f.Endings.Last().Message.Contains("문 여는 발판") && puzzle.First.PressCount == 1 &&
+                puzzle.Release.PressCount == 2, "room two door command invoked a button");
+        }));
+        await Test("pickup, target approach and release keep physics suspended until placement", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var puzzle = ConfigureBoxPuzzle(f);
+            f.Body.transform.position = new Vector3(0, 0, 6);
+            f.Box.enabled = false;
+            f.Voice.SendChat("저 상자 집어"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == null, "unavailable hanging box was picked up");
+            f.Box.enabled = true;
+            f.Voice.SendChat("저 상자 집어"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == f.Box && !puzzle.BoxCollider.enabled && puzzle.BoxBody.isKinematic,
+                "settled box did not use the carry attachment");
+            f.Voice.SendChat("상자를 발판 위로 옮겨"); f.Tick(6, 120);
+            Check(f.Body.CurrentHeldObject == f.Box && !puzzle.BoxCollider.enabled &&
+                puzzle.Pad.IsAtApproach(f.Body.transform.position) && f.Runner.SelectedTarget == f.Box,
+                "travel dropped the box or discarded the selected box context");
+            f.Voice.SendChat("발판에 내려놔"); f.Tick(5, 100);
+            Check(f.Body.CurrentHeldObject == null && puzzle.BoxCollider.enabled && !puzzle.BoxBody.isKinematic &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Completed &&
+                Math.Abs(f.Box.transform.position.x - puzzle.Pad.support.bounds.center.x) < 0.001f,
+                "placed box did not restore physics at the pad");
+        }));
+        await Test("transcribed compound placement uses the same grounded pickup and drop plan", () => Sync(() =>
+        {
+            var f = new Fixture();
+            var puzzle = ConfigureBoxPuzzle(f);
+            f.Body.transform.position = new Vector3(0, 0, 6);
+            f.Voice.commandRouting = AgentCommandRouting.ApiInterpretation;
+            int interpretationCalls = 0;
+            OpenAIClient.Response = (request, token) => { interpretationCalls++; return Task.FromResult(Reply()); };
+            OpenAIClient.Transcription = () => Task.FromResult("저 상자 가져다가 문 여는 발판 위에 올려놔");
+            f.Voice.StartVoiceInput();
+            f.Voice.StopVoiceInput();
+            f.Tick(10, 200);
+            Check(interpretationCalls == 0 && f.Actions.Count == 3 && f.Actions.All(action => action.Outcome == AgentExecutionOutcome.Completed) &&
+                f.Body.CurrentHeldObject == null && puzzle.BoxCollider.enabled && !puzzle.BoxBody.isKinematic &&
+                f.Body.LastDroppedObject == f.Box, "compound voice plan did not finish the three ordered actions");
+        }));
+        await Test("ambiguous and blocked placement do not release a carried crate", () => Sync(() =>
+        {
+            var f = new Fixture(apiAvailable: false);
+            var puzzle = ConfigureBoxPuzzle(f);
+            f.Body.transform.position = new Vector3(0, 0, 6);
+            var decoy = new GameObject().AddComponent<AgentInteractable>();
+            decoy.id = "other_pad"; decoy.displayName = "발판";
+            f.Voice.SendChat("저 상자 가져다가 발판 위에 올려놔");
+            Check(f.Body.CurrentHeldObject == null && f.Endings.Last().Outcome == AgentExecutionOutcome.Rejected,
+                "ambiguous destination selected a pad automatically");
+            var wall = new GameObject().AddComponent<Collider>();
+            Physics.CapsuleCast = (bottom, top, radius, direction, distance) => wall;
+            f.Voice.SendChat("저 상자 가져다가 문 여는 발판 위에 올려놔"); f.Tick(8, 160);
+            Check(f.Body.CurrentHeldObject == f.Box && !puzzle.BoxCollider.enabled &&
+                f.Endings.Last().Outcome == AgentExecutionOutcome.Failed &&
+                f.Endings.Last().Message.Contains("장애물"), "blocked approach released the box");
         }));
         Console.WriteLine($"TOTAL: {_passed} passed, {_failed} failed, {_skipped} skipped. Unity Play Mode NOT executed.");
         return _failed == 0 ? 0 : 1;

@@ -167,6 +167,7 @@ namespace AgentEscape.VoiceAI
             if (error != null) { CompleteStep(id, AgentExecutionOutcome.Rejected, error); return; }
             var action = CurrentAction;
             if (CurrentSource == AgentCommandSource.Player && action.Target != null &&
+                !(action.Verb == AgentVocabulary.MoveTo && action.PlacementTargetId != null) &&
                 _stage.TryResolve(action.Target, out var selected)) SelectTarget(selected);
             PendingIntent = Describe(action);
             SetState(AgentExecutionState.Announcing);
@@ -241,6 +242,18 @@ namespace AgentEscape.VoiceAI
             if (_requireHeldObject && (_requiredHeldObject == null || CurrentHeldObject != _requiredHeldObject))
                 return "이동에 필요한 물체를 더 이상 들고 있지 않습니다.";
             var action = CurrentAction;
+            if (action?.PlacementTargetId != null)
+            {
+                if (!_stage.TryResolvePlacement(action.PlacementTargetId, out var destination) ||
+                    _expectedTargets == null ||
+                    !_expectedTargets.TryGetValue(action.PlacementTargetId, out var expectedPad) ||
+                    destination.Interactable != expectedPad)
+                    return "지정한 발판이 변경되었거나 비활성화되었습니다.";
+                string placementError = destination.ConfigurationError();
+                if (placementError != null) return placementError;
+                if (CurrentHeldObject != destination.box)
+                    return "발판에 놓을 상자를 들고 있지 않습니다.";
+            }
             _stage.CopyInventoryTo(_validationContext.Inventory);
             _validationContext.Objects.Clear();
             AgentInteractable actual = null;
@@ -282,7 +295,8 @@ namespace AgentEscape.VoiceAI
                 case AgentVocabulary.Inspect: return target + "을(를) 살펴보겠습니다.";
                 case AgentVocabulary.Press: return target + "을(를) 누르겠습니다.";
                 case AgentVocabulary.PickUp: return target + "을(를) 집겠습니다.";
-                case AgentVocabulary.Drop: return target + "을(를) 내려놓겠습니다.";
+                case AgentVocabulary.Drop:
+                    return target + (action.PlacementTargetId != null ? "을(를) 발판 위에 내려놓겠습니다." : "을(를) 내려놓겠습니다.");
                 case AgentVocabulary.MoveDirection:
                     string direction = action.Direction == "back" ? "뒤로" : action.Direction == "left" ? "왼쪽으로" :
                         action.Direction == "right" ? "오른쪽으로" : "앞으로";

@@ -22,6 +22,7 @@
     <Compile Include="../../../Assets/Scripts/VoiceAI/Movement/RobotAnimatorBridge.cs" />
     <Compile Include="../../../Assets/Scripts/VoiceAI/Exploration/RobotExplorationController.cs" />
     <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/AgentInteractable.cs" />
+    <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/AgentPlacementTarget.cs" />
     <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/SceneStageContext.cs" />
     <Compile Include="../../../Assets/Scripts/VoiceAI/Agent/VoiceAgent.cs" />
     <Compile Include="../../../Assets/Scripts/VoiceAI/Interaction/AgentButton.cs" />

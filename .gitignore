@@ -1,8 +1,11 @@
 # API 키: 절대 커밋 금지
-/secrets/*
-!/secrets/README.txt
+/secrets/
 .env
 *.key
+
+# Installed locally from the original Unity Starter Assets package.
+/Assets/Starter Assets/
+/Assets/Starter Assets.meta
 
 # This .gitignore file should be placed at the root of your Unity project directory
 #
